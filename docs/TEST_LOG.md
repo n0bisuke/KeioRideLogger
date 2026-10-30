@@ -111,6 +111,7 @@
 - 画面上の時刻時点では在圏セル変更候補は0件。最初の在圏セルをbaselineとして扱う表示も確認した。これは短い現状確認であり、乗車中に切り替わりがないことを示すものではない。
 - 切断・再接続、stale/欠落処理、Webページからのネットワーク送信有無、軌跡・グラフ連携は未確認。ROADMAPのBLEタスクに進捗として記録し、完了扱いにはしていない。
 - 添付画面を`docs/lt/local-captures/web-ble-live-reception-2321.png`へローカルコピー。正確なGPSとCell IDが含まれるため、同フォルダの`.gitignore`によりGit管理対象外。
+- 受信カード表示から次に進むため、BLEだけの軌跡地図・時系列グラフ表示と接続試験の追加指示を[`ble-live-visualization-prompt.md`](lt/ble-live-visualization-prompt.md)にまとめ、ROADMAPとLT構成案へ反映した。
 
 ### LT用実機キャプチャの整理（2026-10-30）
 
