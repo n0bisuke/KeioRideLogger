@@ -19,10 +19,14 @@ h3 { font-size: 13px; margin: 10px 0 4px; color: var(--muted); font-weight: 600;
 header.top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: center;
   padding: 12px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
 .status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dashboard-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+.dashboard-switch button { padding: 2px 9px; border-color: transparent; font-size: 12px; }
+.dashboard-switch button.active { background: var(--panel2); border-color: var(--serving); color: var(--serving); }
 .badge { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 13px; background: var(--panel2); }
 .badge.csv { border-color: var(--http); }
 .badge.ble, .badge.ok { border-color: var(--serving); color: var(--serving); }
 .badge.warn { border-color: var(--warn); color: var(--warn); }
+.badge.demo-badge { border-color: var(--change); color: var(--change); }
 .clock { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 700; }
 .pagelink { font-size: 13px; }
 main { padding: 12px 16px 32px; display: grid; gap: 12px; max-width: 1600px; margin: 0 auto; }
@@ -78,7 +82,7 @@ tr.clickable:hover, tr.selected { background: var(--panel2); }
 @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
 .chart { height: 180px; cursor: crosshair; }
 .chart.lane { height: 90px; }
-.route-canvas { height: 64px; margin-top: 4px; }
+.route-canvas { height: 104px; margin-top: 4px; }
 .routenote { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .markerrow { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; font-size: 13px; }
 select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font: inherit; }
@@ -99,27 +103,60 @@ dd { margin: 0; }
 .routenote { font-size: 12px; color: var(--muted); }
 .routenote summary { cursor: pointer; }
 
-/* LT page on a 16:9 desktop (about 1920x1080): fit everything without page scrolling.
-   Smaller screens keep the normal scrolling layout. */
-@media (min-width: 1200px) and (min-height: 760px) {
-  body.onescreen main { height: calc(100vh - 62px); max-width: none; padding: 8px 12px; gap: 8px;
-    grid-template-rows: auto auto minmax(0, 1fr) auto; }
-  body.onescreen .panel { padding: 8px 10px; }
-  body.onescreen .loader .msg:not(:last-child) { display: none; }
-  body.onescreen .loader .msg { margin-top: 4px; padding: 3px 8px; }
-  body.onescreen .grid { min-height: 0; grid-template-columns: minmax(0, 1.55fr) minmax(380px, 1fr); }
-  body.onescreen .mappanel { display: flex; flex-direction: column; min-height: 0; }
-  body.onescreen .mappanel .toolbar { margin-bottom: 4px; }
-  body.onescreen .mapwrap { flex: 1; min-height: 0; }
-  body.onescreen #map { height: 100%; }
-  body.onescreen .side { min-height: 0; overflow: auto; gap: 8px; }
-  body.onescreen .history { max-height: 160px; }
-  body.onescreen .charts { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 12px; }
-  body.onescreen .charts h3 { margin: 2px 0; }
-  body.onescreen .chart { height: 128px; }
-  body.onescreen .chart.lane { height: 54px; }
-  body.onescreen #selectionPanel { display: none; }
+/* The overview is a true viewport dashboard on desktop. Small screens keep natural scrolling. */
+@media (min-width: 1000px) and (min-height: 760px) {
+  body.dashboard-overview { height: 100vh; overflow: hidden; }
+  body.dashboard-overview main {
+    height: calc(100vh - var(--topbar-height, 76px)); max-width: none; padding: 8px 12px; gap: 8px; overflow: hidden;
+    grid-template-rows: auto minmax(0, .82fr) minmax(0, 1.18fr);
+  }
+  body.dashboard-overview.has-route main { grid-template-rows: auto auto minmax(0, .72fr) minmax(0, 1fr); }
+  body.dashboard-overview .panel { padding: 8px 10px; }
+  body.dashboard-overview .loader .msg { margin-top: 4px; padding: 3px 8px; }
+  body.dashboard-overview .privacy { margin-top: 4px; }
+  body.dashboard-overview .grid { min-height: 0; grid-template-columns: minmax(0, 1.45fr) minmax(400px, 1fr); }
+  body.dashboard-overview .mappanel { display: flex; flex-direction: column; min-height: 0; }
+  body.dashboard-overview .mappanel .toolbar { margin-bottom: 4px; }
+  body.dashboard-overview .mapwrap { flex: 1; min-height: 0; }
+  body.dashboard-overview #map { height: 100%; }
+  body.dashboard-overview .legend { display: none; }
+  body.dashboard-overview .side { min-height: 0; overflow: hidden; align-content: stretch; grid-template-rows: auto auto minmax(0, 1fr); gap: 6px; }
+  body.dashboard-overview .character { padding: 4px 8px; gap: 8px; min-height: 48px; }
+  body.dashboard-overview .sprite { width: 42px; height: 42px; }
+  body.dashboard-overview .character .small.muted:last-child { display: none; }
+  body.dashboard-overview .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  body.dashboard-overview .card { padding: 4px 6px; border-radius: 6px; }
+  body.dashboard-overview .card b { font-size: 10px; line-height: 1.2; }
+  body.dashboard-overview .card span { font-size: 16px; line-height: 1.25; }
+  body.dashboard-overview .card .help, body.dashboard-overview .card .small.muted,
+  body.dashboard-overview .card-note { display: none; }
+  body.dashboard-overview .card.distance { display: none; }
+  body.dashboard-overview .history-panel { display: flex; flex-direction: column; min-height: 0; padding: 5px 8px; overflow: hidden; }
+  body.dashboard-overview .history-panel h2 { margin: 0 0 2px; font-size: 13px; }
+  body.dashboard-overview .history-panel .help { display: none; }
+  body.dashboard-overview .history-panel #cellDiag { margin: 0 0 2px; font-size: 10px; line-height: 1.2; }
+  body.dashboard-overview .history { flex: 1; min-height: 0; max-height: none; overflow: auto; scrollbar-gutter: stable; }
+  body.dashboard-overview .history table { font-size: 10px; line-height: 1.15; }
+  body.dashboard-overview .history th, body.dashboard-overview .history td { padding: 2px 4px; }
+  body.dashboard-overview .side > .panel.small { display: none; }
+  body.dashboard-overview .route { padding: 5px 8px; }
+  body.dashboard-overview .route .routehead h2 { font-size: 13px; }
+  body.dashboard-overview .route .route-canvas { height: 62px; margin: 0; }
+  body.dashboard-overview .route .routenote { display: none; }
+  body.dashboard-overview .timeseries { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  body.dashboard-overview .timeseries > h2 { flex: none; margin: 0 0 2px; }
+  body.dashboard-overview .timeseries .toolbar { flex: none; margin: 2px 0 4px; gap: 4px 8px; }
+  body.dashboard-overview .timeseries .replay .small { display: none; }
+  body.dashboard-overview .charts { flex: 1; min-height: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 8px; }
+  body.dashboard-overview .charts > div { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  body.dashboard-overview .charts h3 { flex: none; margin: 1px 0; font-size: 11px; line-height: 1.15; }
+  body.dashboard-overview .chart { flex: 1; height: auto; min-height: 68px; }
+  body.dashboard-overview .chart.lane { flex: none; height: 40px; min-height: 40px; }
+  body.dashboard-overview .timeseries > h3 { flex: none; margin: 2px 0 0; }
+  body.dashboard-overview .timeseries > .small { flex: none; margin: 1px 0 0; font-size: 10px; }
+  body.dashboard-overview #selectionPanel, body.dashboard-overview #sensorsPanel { display: none; }
 }
+body:not(.dashboard-overview) .dashboard-switch button[aria-pressed="false"] { color: var(--muted); }
 .sensors summary { cursor: pointer; list-style: revert; }
 .sensors summary h2 { display: inline; }
 /* CSV replay controls: the cursor slider takes the remaining width and wraps on narrow screens. */

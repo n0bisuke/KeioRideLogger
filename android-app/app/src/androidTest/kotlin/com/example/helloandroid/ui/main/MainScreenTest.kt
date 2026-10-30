@@ -121,7 +121,7 @@ class MainScreenTest {
   fun speedCharacter_showsBandWithSpeed_andUnknownSeparately() {
     var state by
       mutableStateOf(
-        RecorderUiState(recording = true, speed = SpeedDisplay(SpeedBand.WALK, 4.2, null))
+        RecorderUiState(recording = true, speed = SpeedDisplay(SpeedBand.SLOW_WALK, 4.2, null))
       )
     composeTestRule.setContent {
       MainScreen(
@@ -133,7 +133,7 @@ class MainScreenTest {
         onProbeEnabledChange = {},
       )
     }
-    composeTestRule.onNodeWithText("普通歩き").assertExists()
+    composeTestRule.onNodeWithText("ゆっくり歩き").assertExists()
     composeTestRule.onNodeWithText("GPS速度 4.2 km/h", substring = true).assertExists()
 
     state = state.copy(speed = SpeedDisplay(null, null, SpeedUnknownReason.STALE))

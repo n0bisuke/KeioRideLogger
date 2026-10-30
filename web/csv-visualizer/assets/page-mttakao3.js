@@ -3,7 +3,7 @@
 "use strict";
 KRLApp.start({
   title: "Mt.TAKAO 3号｜ネットワーク観測",
-  subtitle: "京王ライナー Mt.TAKAO 3号（土休日）乗車中の通信状態。予定は公式時刻表、軌跡と通信値は実測です",
+  subtitle: "京王ライナー Mt.TAKAO 3号のネットワーク観測デモ。予定ルートと端末の実測を区別して表示します",
   otherPage: { href: "../", label: "← 移動モニターへ" },
   travelModes: null,
   showDistance: false,
@@ -11,9 +11,9 @@ KRLApp.start({
   assetBase: "../",
   route: {
     stations: [
-      { name: "新宿", hh: 11, mm: 0, kind: "発" },
-      { name: "明大前", hh: 11, mm: 6, kind: "" },
       { name: "高尾山口", hh: 11, mm: 45, kind: "着" },
+      { name: "明大前", hh: 11, mm: 6, kind: "" },
+      { name: "新宿", hh: 11, mm: 0, kind: "発" },
     ],
     // Public station locations (approximate, WGS84) along the Keio Line / Takao Line, joined into a
     // rough polyline. Used only for the "off the planned route" notice; positions are never snapped.

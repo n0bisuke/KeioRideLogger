@@ -15,11 +15,14 @@ const KRLApp = (() => {
     csv: null,
     live: new K.LiveStore(),
     view: "none",                // "none" | "csv" | "ble"
+    demo: false,
+    debug: false,
     range: [0, 1],               // CSV window (fractions)
     liveWindowMs: 10 * 60 * 1000,
     selectedT: null,
     csvT: null,                  // CSV cursor kept while another view is shown
-    play: { playing: false, speed: 1, timer: null, lastReal: 0 },
+    play: { playing: false, speed: 5, timer: null, lastReal: 0 },
+    dashboard: { overview: true },
     map: { view: null, userMoved: false, enabled: true },
     markers: [],                 // manual "実測メモ" markers { t, label }
     ble: { device: null, char: null, reasm: null, state: "未接続", connected: false, userDisconnect: false },
@@ -72,11 +75,16 @@ const KRLApp = (() => {
   function buildLayout() {
     const other = cfg.otherPage ? `<a class="pagelink" href="${cfg.otherPage.href}">${esc(cfg.otherPage.label)}</a>` : "";
     document.body.innerHTML = `
-<header class="top">
+<header class="top" id="topHeader">
   <div class="title"><h1>${esc(cfg.title)}</h1><p class="sub">${esc(cfg.subtitle)}</p></div>
   <div class="status">
     <span class="badge" id="modeBadge">データ未読み込み</span>
+    <span class="badge demo-badge hidden" id="demoBadge">DEMO · 架空データ</span>
     <span class="badge" id="bleBadge">BLE 未接続</span>
+    <span class="dashboard-switch" role="group" aria-label="ダッシュボード表示">
+      <button id="overviewMode" class="active" type="button" aria-pressed="true">一覧</button>
+      <button id="detailMode" type="button" aria-pressed="false">詳細</button>
+    </span>
     <span class="clock" id="clock">--:--:-- JST</span>
     ${other}
   </div>
@@ -100,7 +108,7 @@ const KRLApp = (() => {
     </details>
   </section>
   ${cfg.route ? `<section class="panel route" aria-labelledby="h-route">
-    <div class="routehead"><h2 id="h-route">予定ルート <span class="tag">概略・縮尺なし・時刻は公式時刻表の予定</span></h2>
+    <div class="routehead"><h2 id="h-route">走行ルートと時刻表 <span class="tag">概略・縮尺なし・時刻は公式時刻表の予定</span></h2>
       <span class="chip routestatus" id="routeStatus">GPS 位置なし</span>
       <span class="markerrow"><label>実測メモ <select id="markerLabel">${cfg.route.memoLabels.map(l => `<option>${esc(l)}</option>`).join("")}</select></label><button id="addMarker" type="button">選択中の時刻に追加</button><span id="markerList" class="muted small"></span></span></div>
     <canvas id="routeCanvas" class="route-canvas" aria-label="ルート概略図"></canvas>
@@ -124,11 +132,11 @@ const KRLApp = (() => {
       <div class="panel character"><canvas id="charCanvas" class="sprite" aria-label="速度キャラクター"></canvas>
         <div><b id="charLabel">—</b><div id="charSub" class="small muted"></div><div class="small muted">GPS 速度に合わせた演出です。乗り物を判定したものではありません。</div></div></div>
       <div class="cards" id="cards"></div>
-      <div class="panel"><h2>セル変更の履歴</h2><p class="help">「接続アンテナエリアの変化（推定）」は、記録された在圏セルの識別情報の変化から推定したものです。物理的な電波塔やアンテナの切り替えを確定するものではありません。</p><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
+      <div class="panel history-panel"><h2>セル変更の履歴</h2><p class="help">「接続アンテナエリアの変化（推定）」は、記録された在圏セルの識別情報の変化から推定したものです。物理的な電波塔やアンテナの切り替えを確定するものではありません。</p><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
       ${cfg.travelModes ? `<div class="panel small"><label>移動手段メモ（表示用・自動判定しません） <select id="travelMode">${cfg.travelModes.map(m => `<option>${esc(m)}</option>`).join("")}</select></label></div>` : ""}
     </section>
   </div>
-  <section class="panel" aria-labelledby="h-ts">
+  <section class="panel timeseries" aria-labelledby="h-ts">
     <h2 id="h-ts">時系列 <span class="tag" id="axisTag">JST</span></h2>
     <div class="toolbar" id="csvRange">
       <span>表示する時間帯</span>
@@ -141,7 +149,7 @@ const KRLApp = (() => {
       <button id="playStart" type="button" aria-label="先頭へ">⏮ 先頭</button>
       <button id="playToggle" type="button" aria-label="再生" aria-pressed="false">▶ 再生</button>
       <button id="playEnd" type="button" aria-label="末尾へ">⏭ 末尾</button>
-      <label>速度 <select id="playSpeed"><option value="0.5">0.5 倍</option><option value="1" selected>1 倍</option><option value="2">2 倍</option><option value="5">5 倍</option></select></label>
+      <label>速度 <select id="playSpeed"><option value="1">1 倍</option><option value="2">2 倍</option><option value="5" selected>5 倍</option><option value="10">10 倍</option><option value="20">20 倍</option><option value="30">30 倍</option></select></label>
       <input type="range" id="cursor" min="0" max="10000" value="0" aria-label="再生位置の時刻">
       <span id="cursorLabel"></span>
       <span class="small muted">スペース: 再生・一時停止　← →: 1 秒（Shift で 10 秒）</span>
@@ -178,8 +186,10 @@ const KRLApp = (() => {
 
   function renderHeader() {
     const badge = $("modeBadge");
-    badge.textContent = st.view === "csv" ? "表示: CSV（計測済みデータ）" : st.view === "ble" ? "表示: BLE ライブ" : "データ未読み込み";
+    badge.textContent = st.debug ? "表示: DEBUG データ" : st.demo ? "表示: デモデータ" : st.view === "csv" ? "表示: CSV（計測済みデータ）" : st.view === "ble" ? "表示: BLE ライブ" : "データ未読み込み";
     badge.className = `badge ${st.view}`;
+    $("demoBadge").classList.toggle("hidden", !st.demo);
+    $("demoBadge").textContent = st.debug ? "DEBUG · 架空データ" : "DEMO · 架空データ";
     const b = $("bleBadge");
     const stale = st.ble.connected && liveStale();
     b.textContent = st.ble.connected ? (stale ? "BLE 接続中・受信停止（古い値）" : "BLE 接続中・受信中") : `BLE ${st.ble.state}`;
@@ -225,7 +235,7 @@ const KRLApp = (() => {
     cards.push(card("移動速度（GPS 推定）",
       gpsFresh ? (kmh ?? '<span class="nodata">速度なし（0 km/h ではない）</span>') : `<span class="nodata">${gps ? "GPS 更新なし" : "GPS 未測位"}</span>`,
       gps ? `最終測位 ${K.jstClock(gps.t)}（${ageText(gpsAge)}）・精度 ${fmt(gps.acc, 1, " m") ?? "不明"}` : "", stale || (gps && !gpsFresh) ? "dim" : ""));
-    if (cfg.showDistance) cards.push(card("距離（参考）", distanceText(s, t), `精度 ${LOW_ACC_M} m 以内・欠測を除く測位点から`));
+    if (cfg.showDistance) cards.push(card("距離（参考）", distanceText(s, t), `精度 ${LOW_ACC_M} m 以内・欠測を除く測位点から`, "distance"));
     // Each radio metric keeps a one-line plain-Japanese explanation that is always visible.
     const explained = (k, v, help, sub = "", cls = "") =>
       `<div class="card ${cls}"><b>${k}</b><span>${v}</span><div class="help">${help}</div>${sub ? `<div class="small muted">${sub}</div>` : ""}</div>`;
@@ -307,7 +317,13 @@ const KRLApp = (() => {
     const s = session();
     const table = $("history");
     if (!s) { table.innerHTML = ""; return; }
-    const rows = s.changes.filter(c => inWin(c.t)).slice().reverse();
+    const allRows = s.changes.filter(c => inWin(c.t)).slice().reverse();
+    const rows = allRows;
+    const diag = $("cellDiag");
+    if (diag) {
+      const suffix = ` 全${allRows.length}件`;
+      diag.textContent = K.cellDiagnosis(s).text + suffix + (s.legacyChanges ? "（旧形式の cell_change: 最初の行を基準として扱っています）" : "");
+    }
     if (!rows.length) { table.innerHTML = `<tr><td class="muted">この時間帯にセルイベントはありません</td></tr>`; return; }
     const label = { switched: "接続アンテナエリアの変化（推定）", baseline: "基準", indeterminate: "判定不能" };
     table.innerHTML = "<thead><tr><th>時刻 (JST)</th><th>種別</th><th>セル</th><th>経路</th></tr></thead><tbody>" + rows.map(c =>
@@ -514,9 +530,12 @@ const KRLApp = (() => {
     const [x0, x1] = windowRange();
     const spanS = (x1 - x0) / 1000;
     const stepS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find(v => spanS / v <= 7) || 7200;
+    const shortWindow = spanS <= 120;
+    $("axisTag").textContent = shortWindow ? "JST・経過" : "JST";
     for (let t = Math.ceil(x0 / 1000 / stepS) * stepS * 1000; t <= x1; t += stepS * 1000) {
       const x = sc.sx(t); ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, h - PAD.b); ctx.stroke();
-      const label = K.jstClock(t, stepS < 60);
+      const elapsedS = Math.max(0, Math.round((t - x0) / 1000));
+      const label = shortWindow ? `${Math.floor(elapsedS / 60)}:${pad2(elapsedS % 60)}` : K.jstClock(t, false);
       const tw = ctx.measureText(label).width;
       ctx.fillText(label, Math.min(Math.max(x - tw / 2, PAD.l), w - tw - 2), h - 7);
     }
@@ -679,33 +698,74 @@ const KRLApp = (() => {
     const s = session();
     if (!cfg.route || !s) return [];
     const ref = windowRange()[1];
-    return cfg.route.stations.filter(x => x.hh !== null).map(x => ({ t: K.jstTimeOnDay(ref, x.hh, x.mm), label: `${x.name} ${pad2(x.hh)}:${pad2(x.mm)}` }));
+    return cfg.route.stations.filter(x => x.hh !== null)
+      .map(x => ({ t: K.jstTimeOnDay(ref, x.hh, x.mm), label: `${x.name} ${pad2(x.hh)}:${pad2(x.mm)}` }))
+      .sort((a, b) => a.t - b.t);
   }
   function renderRoute() {
     if (!cfg.route) return;
     const { ctx, w, h } = setupCanvas($("routeCanvas"));
     const stations = cfg.route.stations;
-    const x = i => 70 + i * (w - 140) / (stations.length - 1), y = h / 2 - 2;
-    ctx.strokeStyle = css("--gps"); ctx.lineWidth = 5; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(x(0), y); ctx.lineTo(x(stations.length - 1), y); ctx.stroke();
+    const padX = Math.min(82, Math.max(56, w * 0.055));
+    const x = i => padX + i * (w - padX * 2) / (stations.length - 1);
+    const y = h * 0.58;
+    // The rail overview is intentionally schematic. Give it a subtle night-map treatment without
+    // implying that the line, cell regions, or GPS position are a geographic measurement.
+    ctx.save();
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, "#071522"); bg.addColorStop(0.55, "#0b1b2b"); bg.addColorStop(1, "#081321");
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(62, 119, 151, .12)"; ctx.lineWidth = 1;
+    for (let row = 0; row < 4; row++) {
+      const yy = 15 + row * (h - 30) / 3;
+      ctx.beginPath(); ctx.moveTo(0, yy);
+      for (let xx = 0; xx <= w; xx += 24) ctx.lineTo(xx, yy + Math.sin(xx / 92 + row) * 4);
+      ctx.stroke();
+    }
+    // Soft cyan glow and bright rail line, in the same visual language as the LT reference.
+    ctx.shadowColor = "#12c9f2"; ctx.shadowBlur = 16;
+    ctx.strokeStyle = "rgba(18, 201, 242, .36)"; ctx.lineWidth = 12; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x(0), y);
+    ctx.bezierCurveTo(x(0) + (x(1) - x(0)) * .36, y - 17, x(1) - (x(1) - x(0)) * .25, y + 14, x(1), y);
+    ctx.bezierCurveTo(x(1) + (x(2) - x(1)) * .35, y - 14, x(2) - (x(2) - x(1)) * .28, y + 13, x(2), y);
+    ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#23d7fa"; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(x(0), y);
+    ctx.bezierCurveTo(x(0) + (x(1) - x(0)) * .36, y - 17, x(1) - (x(1) - x(0)) * .25, y + 14, x(1), y);
+    ctx.bezierCurveTo(x(1) + (x(2) - x(1)) * .35, y - 14, x(2) - (x(2) - x(1)) * .28, y + 13, x(2), y);
+    ctx.stroke();
     stations.forEach((stn, i) => {
-      ctx.beginPath(); ctx.arc(x(i), y, 7, 0, Math.PI * 2); ctx.fillStyle = css("--panel"); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = css("--fg"); ctx.stroke();
+      const endpoint = i === 0 || i === stations.length - 1;
+      if (endpoint) {
+        ctx.beginPath(); ctx.arc(x(i), y, 13, 0, Math.PI * 2); ctx.fillStyle = "rgba(35, 215, 250, .13)"; ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(x(i), y, endpoint ? 8 : 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#071522"; ctx.fill(); ctx.lineWidth = endpoint ? 3 : 2.5; ctx.strokeStyle = endpoint ? "#32e3ff" : "#d6f6ff"; ctx.stroke();
       ctx.textAlign = "center";
-      ctx.fillStyle = css("--fg"); ctx.font = "bold 14px system-ui"; ctx.fillText(stn.name, x(i), y - 13);
-      ctx.fillStyle = css("--plan"); ctx.font = "12px system-ui"; ctx.fillText(`予定 ${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`, x(i), y + 24);
+      ctx.fillStyle = "#f2f7fb"; ctx.font = `bold ${endpoint ? 15 : 13}px system-ui`; ctx.fillText(stn.name, x(i), y - 20);
+      ctx.fillStyle = "#a9bdcc"; ctx.font = "12px system-ui"; ctx.fillText(`予定 ${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`, x(i), y + 25);
     });
+    ctx.font = "11px system-ui"; ctx.fillStyle = "#8da8ba";
+    ctx.textAlign = "left"; ctx.fillText("← 高尾・高尾山口方面", 12, h - 9);
+    ctx.textAlign = "right"; ctx.fillText("新宿・都心方面 →", w - 12, h - 9);
     ctx.textAlign = "left";
     const s = session();
     // Scheduled position from the timetable (not a measurement).
     const planT = s ? focusT() : null;
     let note = "駅は均等配置の概略図で、距離の縮尺はありません。予定時刻は京王電鉄の公式時刻表（土休日）の掲載値で、乗車日に確認してください。";
     if (planT !== null) {
-      const ts = stations.map(stn => K.jstTimeOnDay(planT, stn.hh, stn.mm));
-      const i = ts.findIndex((t, k) => k < ts.length - 1 && planT >= t && planT <= ts[k + 1]);
-      if (i >= 0) {
-        const px = x(i) + (planT - ts[i]) / (ts[i + 1] - ts[i]) * (x(i + 1) - x(i));
-        ctx.beginPath(); ctx.arc(px, y, 9, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = css("--plan"); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = css("--plan"); ctx.font = "11px system-ui"; ctx.fillText("予定位置", px + 12, y - 6);
+      const ordered = stations.map((stn, i) => ({ t: K.jstTimeOnDay(planT, stn.hh, stn.mm), x: x(i) }))
+        .sort((a, b) => a.t - b.t);
+      const segment = ordered.slice(0, -1).find((a, i) => planT >= a.t && planT <= ordered[i + 1].t);
+      if (segment) {
+        const i = ordered.indexOf(segment), next = ordered[i + 1];
+        const px = segment.x + (planT - segment.t) / (next.t - segment.t) * (next.x - segment.x);
+        ctx.shadowColor = "#ffb347"; ctx.shadowBlur = 12;
+        ctx.beginPath(); ctx.arc(px, y, 9, 0, Math.PI * 2); ctx.fillStyle = "#ffb347"; ctx.fill(); ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(px, y, 13, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2; ctx.strokeStyle = "#fff0cf"; ctx.stroke(); ctx.setLineDash([]);
+        ctx.textAlign = px > w * .78 ? "right" : "left";
+        ctx.fillStyle = "#fff0cf"; ctx.font = "bold 11px system-ui"; ctx.fillText("予定位置", px > w * .78 ? px - 15 : px + 15, y - 11);
+        ctx.textAlign = "left";
         note += " 点線の円は、選択中の時刻から時刻表で計算した予定位置で、実測位置ではありません。";
       }
     }
@@ -728,6 +788,7 @@ const KRLApp = (() => {
       status.textContent = off ? `ルート外で動作確認中（予定ルートから${dist}）` : "予定ルート付近（乗車中かどうかは判定しません）";
       status.className = `chip routestatus ${off ? "off" : "near"}`;
     }
+    ctx.restore();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -749,6 +810,25 @@ const KRLApp = (() => {
     if (v === "csv" && st.selectedT === null && st.csv) st.selectedT = windowRange()[0];
     clampCursor();
     render();
+  }
+
+  function setDashboardMode(overview) {
+    st.dashboard.overview = overview;
+    document.body.classList.toggle("dashboard-overview", overview);
+    $("overviewMode").setAttribute("aria-pressed", String(overview));
+    $("detailMode").setAttribute("aria-pressed", String(!overview));
+    $("overviewMode").classList.toggle("active", overview);
+    $("detailMode").classList.toggle("active", !overview);
+    // Refit the map to its new viewport while keeping the selected CSV time and range intact.
+    st.map.view = null; st.map.userMoved = false;
+    updateDashboardHeight();
+    requestAnimationFrame(render);
+  }
+
+  function updateDashboardHeight() {
+    if (!document.body.classList.contains("dashboard-overview")) return;
+    const header = $("topHeader");
+    if (header) document.documentElement.style.setProperty("--topbar-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -778,7 +858,16 @@ const KRLApp = (() => {
   function playStep() {
     if (!st.play.playing) return;
     const now = performance.now();
-    advance((now - st.play.lastReal) * st.play.speed);
+    try {
+      advance((now - st.play.lastReal) * st.play.speed);
+    } catch (error) {
+      // A failed canvas redraw must not leave the UI claiming playback is active forever.
+      st.play.playing = false;
+      st.play.timer = null;
+      console.error("CSV replay stopped after a rendering error", error);
+      renderReplay();
+      return;
+    }
     st.play.lastReal = now;
     if (st.play.playing) st.play.timer = setTimeout(playStep, PLAY_TICK_MS);
   }
@@ -798,7 +887,7 @@ const KRLApp = (() => {
     $("cursor").value = String(Math.round((t - a) / (b - a) * 10000));
     $("cursorLabel").textContent = `${K.jstClock(t)} JST（開始から ${fmtElapsed(t - st.csv.t0)}）`;
     const toggle = $("playToggle");
-    toggle.textContent = st.play.playing ? "⏸ 一時停止" : "▶ 再生";
+    toggle.textContent = st.play.playing ? `⏸ 一時停止（${st.play.speed}倍）` : "▶ 再生";
     toggle.setAttribute("aria-label", st.play.playing ? "一時停止" : "再生");
     toggle.setAttribute("aria-pressed", String(st.play.playing));
   }
@@ -815,6 +904,20 @@ const KRLApp = (() => {
       r.readAsText(file, "utf-8");
     });
   }
+  function loadDemoData(mode = "demo") {
+    if (st.demo && st.csv && st.debug === (mode === "debug")) return;
+    const isDebug = mode === "debug";
+    const s = K.buildCsvSession(KRL_DEMO_DATA.createCsv({ debug: isDebug }));
+    if (s.error) { message([["bad", `デモデータを作れませんでした: ${s.error}`]]); return; }
+    pause();
+    st.csv = s; st.demo = true; st.debug = isDebug; st.range = [0, 1]; st.csvT = s.t0 + 2000;
+    $("rangeStart").value = 0; $("rangeEnd").value = 1000;
+    if (st.view === "csv") st.view = "none";
+    message([["", `${st.debug ? "DEBUG" : "デモ"}データを表示中: ${s.rows.toLocaleString()} 行（架空の位置・ネットワーク情報です）。CSV ファイルは読み込んでいません。`]]);
+    setView("csv");
+    const hash = st.debug ? "#debug" : "#demo";
+    if (location.hash !== hash) history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+  }
   async function readFile(file) {
     if (!file) return;
     let text;
@@ -827,7 +930,8 @@ const KRLApp = (() => {
       message([["bad", s.error], ...extra]);
       return;
     }
-    st.csv = s; st.range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000;
+    st.csv = s; st.demo = false; st.debug = false; st.range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000;
+    if (["#demo", "#debug"].includes(location.hash)) history.replaceState(null, "", `${location.pathname}${location.search}`);
     const msgs = [["", `CSV を読み込みました: ${s.rows.toLocaleString()} 行。`]];
     if (s.brokenRows) msgs.push(["warn", `列数の合わない行・壊れた行を ${s.brokenRows} 行読み飛ばしました。`]);
     if (s.badTimeRows) msgs.push(["warn", `時刻が読めない行を ${s.badTimeRows} 行読み飛ばしました（推測で配置しません）。`]);
@@ -901,6 +1005,12 @@ const KRLApp = (() => {
   // ---------------------------------------------------------------------------------------------
   // Wiring
   function wire() {
+    if (location.hash === "#demo" || location.hash === "#debug") loadDemoData(location.hash.slice(1));
+    window.addEventListener("hashchange", () => {
+      if (location.hash === "#demo" || location.hash === "#debug") loadDemoData(location.hash.slice(1));
+    });
+    $("overviewMode").addEventListener("click", () => setDashboardMode(true));
+    $("detailMode").addEventListener("click", () => setDashboardMode(false));
     $("file").addEventListener("change", e => readFile(e.target.files[0]));
     const drop = $("drop");
     drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
@@ -936,7 +1046,7 @@ const KRLApp = (() => {
     $("playToggle").addEventListener("click", () => (st.play.playing ? pause() : play()));
     $("playStart").addEventListener("click", () => { pause(); setCursor(windowRange()[0]); });
     $("playEnd").addEventListener("click", () => { pause(); setCursor(windowRange()[1]); });
-    $("playSpeed").addEventListener("input", e => { st.play.speed = Number(e.target.value) || 1; });
+    $("playSpeed").addEventListener("input", e => { st.play.speed = Number(e.target.value) || 1; renderReplay(); });
     $("cursor").addEventListener("input", e => {
       const [a, b] = windowRange();
       setCursor(a + Number(e.target.value) / 10000 * (b - a));
@@ -1025,13 +1135,18 @@ const KRLApp = (() => {
 
   function start(config) {
     cfg = config;
-    if (cfg.layout === "onescreen") document.body.classList.add("onescreen");
     buildLayout();
+    document.body.classList.add("dashboard-overview");
+    document.body.classList.toggle("has-route", !!cfg.route);
     loadSprite();
     wire();
+    updateDashboardHeight();
+    if (window.ResizeObserver) new ResizeObserver(updateDashboardHeight).observe($("topHeader"));
     $("clock").textContent = `${K.jstClock(Date.now())} JST`;
     bleUi(bleSupported() ? "未接続" : st.ble.state);
-    message([["", "CSV を開くか、Android アプリの「BLE でブラウザへ共有」をオンにして「BLE接続」を押してください。サンプルデータは表示しません。"]]);
+    if (location.hash !== "#demo" && location.hash !== "#debug") {
+      message([["", "CSV を開くか、URL に #debug を付けると架空データで画面を確認できます。BLE ライブは Android アプリで共有をオンにして接続してください。"]]);
+    }
     render();
   }
 

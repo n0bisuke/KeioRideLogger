@@ -12,6 +12,7 @@ class SpriteFrameTest {
     val h = 887
     assertEquals(IntOffset(0, 0) to IntSize(443, 443), spriteFrame(w, h, 0))
     assertEquals(IntOffset(887, 443) to IntSize(443, 444), spriteFrame(w, h, 6))
+    assertEquals(IntOffset(1330, 443) to IntSize(444, 444), spriteFrame(w, h, 7))
     // Each frame starts exactly where the previous one in its row ends, and stays inside the sheet.
     for (row in 0..1) {
       var expectedX = 0

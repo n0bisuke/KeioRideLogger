@@ -2,23 +2,24 @@ package com.example.helloandroid.recording
 
 /**
  * Speed bands for the glider character, in sprite-sheet order (left to right, top to bottom).
- * Thresholds are initial values to be tuned against real ride CSVs. "京王ライナー高速域" is a
- * display band, not a measured top speed: GPS speed is not the train's speedometer.
+ * Thresholds are display values for the character, not vehicle detection: GPS speed is not the
+ * train's speedometer, and the 90/110 km/h bands do not prove which train is being ridden.
  */
 enum class SpeedBand(val label: String, val minKmh: Double) {
   STOPPED("停止", 0.0),
   SLOW_WALK("ゆっくり歩き", 1.0),
-  WALK("普通歩き", 3.0),
   RUN("走る", 6.0),
   BICYCLE("自転車くらい", 15.0),
   CAR("車くらい", 30.0),
-  LINER_FAST("京王ライナー高速域", 90.0);
+  LINER_FAST("京王ライナー高速域", 70.0),
+  FAST("高速域", 90.0),
+  VERY_FAST("超高速域", 110.0);
 
   /** Exclusive upper bound; the last band is open-ended. */
   val maxKmh: Double
     get() = entries.getOrNull(ordinal + 1)?.minKmh ?: Double.POSITIVE_INFINITY
 
-  /** Index of this band's frame in the 4x2 sprite sheet (the 8th cell is empty). */
+  /** Index of this band's frame in the 4x2 sprite sheet (all 8 cells are used). */
   val frameIndex: Int
     get() = ordinal
 

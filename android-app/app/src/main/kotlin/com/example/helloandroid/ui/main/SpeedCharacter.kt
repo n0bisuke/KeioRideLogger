@@ -97,13 +97,11 @@ fun SpeedCharacter(speed: SpeedDisplay, recording: Boolean, frozen: Boolean, mod
         } else if (recording) {
           Text("GPS速度 不明（0 km/h ではありません）", style = MaterialTheme.typography.bodyMedium)
         }
-        if (band == SpeedBand.LINER_FAST) {
-          Text(
-            "演出上の速度帯です。GPS速度は車両の速度計ではありません。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
+        Text(
+          "GPS推定速度に応じた演出です。乗り物を自動判定するものではなく、GPS速度は車両の速度計でもありません。",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
     }
   }

@@ -10,21 +10,90 @@ class SpeedClassifierTest {
 
   @Test
   fun bandBoundaries_areLowerInclusive() {
-    assertEquals(SpeedBand.STOPPED, SpeedBand.of(0.0))
-    assertEquals(SpeedBand.STOPPED, SpeedBand.of(0.999))
-    assertEquals(SpeedBand.SLOW_WALK, SpeedBand.of(1.0))
-    assertEquals(SpeedBand.WALK, SpeedBand.of(3.0))
-    assertEquals(SpeedBand.RUN, SpeedBand.of(6.0))
-    assertEquals(SpeedBand.BICYCLE, SpeedBand.of(15.0))
-    assertEquals(SpeedBand.CAR, SpeedBand.of(30.0))
-    assertEquals(SpeedBand.CAR, SpeedBand.of(89.99))
-    assertEquals(SpeedBand.LINER_FAST, SpeedBand.of(90.0))
-    assertEquals(SpeedBand.LINER_FAST, SpeedBand.of(300.0))
+    val cases =
+      listOf(
+        0.0 to SpeedBand.STOPPED,
+        0.999 to SpeedBand.STOPPED,
+        1.0 to SpeedBand.SLOW_WALK,
+        5.99 to SpeedBand.SLOW_WALK,
+        6.0 to SpeedBand.RUN,
+        14.99 to SpeedBand.RUN,
+        15.0 to SpeedBand.BICYCLE,
+        29.99 to SpeedBand.BICYCLE,
+        30.0 to SpeedBand.CAR,
+        69.99 to SpeedBand.CAR,
+        70.0 to SpeedBand.LINER_FAST,
+        89.99 to SpeedBand.LINER_FAST,
+        90.0 to SpeedBand.FAST,
+        109.99 to SpeedBand.FAST,
+        110.0 to SpeedBand.VERY_FAST,
+        300.0 to SpeedBand.VERY_FAST,
+      )
+    for ((kmh, band) in cases) assertEquals("at $kmh", band, SpeedBand.of(kmh))
   }
 
   @Test
-  fun bands_matchSpriteOrder() {
-    assertEquals((0..6).toList(), SpeedBand.entries.map { it.frameIndex })
+  fun bands_matchSpriteOrderAndLabels() {
+    assertEquals((0..7).toList(), SpeedBand.entries.map { it.frameIndex })
+    assertEquals(
+      listOf("停止", "ゆっくり歩き", "走る", "自転車くらい", "車くらい", "京王ライナー高速域", "高速域", "超高速域"),
+      SpeedBand.entries.map { it.label },
+    )
+    assertEquals(listOf(0.0, 1.0, 6.0, 15.0, 30.0, 70.0, 90.0, 110.0), SpeedBand.entries.map { it.minKmh })
+  }
+
+  @Test
+  fun hysteresis_atEveryBoundary() {
+    for (upper in SpeedBand.entries.drop(1)) {
+      val lower = SpeedBand.entries[upper.ordinal - 1]
+      val b = upper.minKmh
+      val margin = maxOf(0.5, 0.1 * b)
+      val c = SpeedClassifier(windowNs = 0)
+      var t = 0L
+      fun at(kmh: Double): SpeedBand? {
+        t += s
+        c.onFix(t, mps(kmh), 5.0)
+        return c.display(t).band
+      }
+      assertEquals("below $b", lower, at(b - 0.01))
+      assertEquals("rising to $b + 0.9 margin", lower, at(b + 0.9 * margin))
+      assertEquals("rising past $b + margin", upper, at(b + margin + 0.01))
+      assertEquals("falling to $b - 0.9 margin", upper, at(b - 0.9 * margin))
+      assertEquals("falling past $b - margin", lower, at(b - margin - 0.01))
+    }
+  }
+
+  /** Runs the series shared with the Web viewer (src/test/resources/speed_band_vectors.txt). */
+  @Test
+  fun sharedVectors_matchExpectedBands() {
+    val text = javaClass.classLoader!!.getResource("speed_band_vectors.txt")!!.readText()
+    val c = SpeedClassifier()
+    var checks = 0
+    for ((lineNo, line) in text.lines().withIndex()) {
+      val f = line.trim().split(' ')
+      if (f[0].isEmpty() || f[0].startsWith("#")) continue
+      val ns = f[1].toLong() * 1_000_000L
+      when (f[0]) {
+        "fix" -> {
+          c.onFix(ns, f[2].toDoubleOrNull()?.let(::mps), f[3].toDoubleOrNull())
+          c.display(ns)
+        }
+        "check" -> {
+          val d = c.display(ns)
+          val where = "line ${lineNo + 1}"
+          if (f[2] == "-") {
+            assertNull(where, d.band)
+            assertEquals(where, f[3], d.unknownReason?.name)
+          } else {
+            assertEquals(where, f[2].toInt(), d.band?.frameIndex)
+            assertEquals(where, f[3], d.band?.label)
+          }
+          checks++
+        }
+        else -> error("bad line ${lineNo + 1}: $line")
+      }
+    }
+    assertEquals(19, checks)
   }
 
   @Test
@@ -66,7 +135,7 @@ class SpeedClassifierTest {
   fun staleFix_clearsBand_insteadOfKeepingOldSpeed() {
     val c = SpeedClassifier()
     c.onFix(1 * s, mps(100.0), 5.0)
-    assertEquals(SpeedBand.LINER_FAST, c.display(2 * s).band)
+    assertEquals(SpeedBand.FAST, c.display(2 * s).band)
     val stale = c.display(7 * s)
     assertNull(stale.band)
     assertEquals(SpeedUnknownReason.STALE, stale.unknownReason)
@@ -104,7 +173,7 @@ class SpeedClassifierTest {
     c.onFix(0, 0.0, 5.0)
     c.display(0)
     c.onFix(1 * s, mps(95.0), 5.0)
-    assertEquals(SpeedBand.LINER_FAST, c.display(1 * s).band)
+    assertEquals(SpeedBand.FAST, c.display(1 * s).band)
   }
 
   @Test

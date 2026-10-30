@@ -1,5 +1,7 @@
 # 速度連動キャラクター素材と実装指示
 
+> 2026-10-31更新: この資料の初期7段階・旧スプライト順は履歴です。現行の8段階、削除する第3ポーズ、けい太くん風/しんごくん風の電車乗車ポーズは [`speed-character-high-speed-task.md`](speed-character-high-speed-task.md) を正として実装してください。
+
 ## 素材
 
 - アプリ用スプライトシート: [`glider_speed_sheet.png`](../../android-app/app/src/main/res/drawable-nodpi/glider_speed_sheet.png)
