@@ -200,7 +200,7 @@ const KRL = (() => {
     if (!s.serving.length && !s.neighbors.length && !s.changes.length && s.kind === "csv" && (!s.hasCellColumns || !s.counts.cell)) {
       return { key: "no_cell_data", text: "セル情報（cell 行）がありません。" };
     }
-    if (switched > 0) return { key: "switched", text: `観測変更候補 ${switched} 件（最初の在圏セルは数えません。API の更新間隔の制限で見逃しがありうるため、ハンドオーバーの確定記録ではありません）。` };
+    if (switched > 0) return { key: "switched", text: `接続アンテナエリアの変化（推定） ${switched} 件（在圏セルの識別情報の変化から推定。最初の在圏セルは数えません。API の更新間隔の制限で見逃しがありうるため、ハンドオーバーの確定記録ではありません）。` };
     if (s.serving.length > 0) return { key: "no_switch", text: "確認できた切り替わりなし（在圏セルは観測できています）。" };
     return { key: "no_serving", text: `在圏セル（registered=true）を取得できず、切り替わりの有無は判定できません。周辺セル ${s.neighbors.length} 件は在圏セルとして扱いません。` };
   }

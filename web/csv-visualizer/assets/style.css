@@ -122,3 +122,7 @@ dd { margin: 0; }
 }
 .sensors summary { cursor: pointer; list-style: revert; }
 .sensors summary h2 { display: inline; }
+/* CSV replay controls: the cursor slider takes the remaining width and wraps on narrow screens. */
+.replay #cursor { flex: 1 1 200px; min-width: 160px; }
+.replay #cursorLabel { font-variant-numeric: tabular-nums; color: var(--fg); }
+tr.future { opacity: .45; }

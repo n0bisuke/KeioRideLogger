@@ -6,6 +6,7 @@
 const KRLApp = (() => {
   const K = KRL;
   const STALE_MS = 5000;
+  const PLAY_TICK_MS = 200;      // replay redraw interval (wall clock)
   const LOW_ACC_M = 30;
   const OSM_URL = "https://tile.openstreetmap.org";
 
@@ -17,6 +18,8 @@ const KRLApp = (() => {
     range: [0, 1],               // CSV window (fractions)
     liveWindowMs: 10 * 60 * 1000,
     selectedT: null,
+    csvT: null,                  // CSV cursor kept while another view is shown
+    play: { playing: false, speed: 1, timer: null, lastReal: 0 },
     map: { view: null, userMoved: false, enabled: true },
     markers: [],                 // manual "実測メモ" markers { t, label }
     ble: { device: null, char: null, reasm: null, state: "未接続", connected: false, userDisconnect: false },
@@ -115,13 +118,13 @@ const KRLApp = (() => {
         <div class="attribution" id="attribution"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></div>
         <div class="maperror hidden" id="mapError">地図タイルを取得できません。軌跡は表示を続けます。</div>
       </div>
-      <p class="legend">太線＝連続した測位（5 秒を超える欠測はつなぎません）・● 精度 ${LOW_ACC_M} m 以内・○ 低精度・◎ 最新位置（灰色は古い位置）・◆ 観測変更候補・× HTTP 失敗。GPS の座標そのままで、道路や線路への補正はしていません。</p>
+      <p class="legend">太線＝連続した測位（5 秒を超える欠測はつなぎません）・● 精度 ${LOW_ACC_M} m 以内・○ 低精度・◎ 最新位置（灰色は古い位置）・◆ 接続アンテナエリアの変化（推定）・× HTTP 失敗。GPS の座標そのままで、道路や線路への補正はしていません。</p>
     </section>
     <section class="side" aria-label="現在のネットワーク指標">
       <div class="panel character"><canvas id="charCanvas" class="sprite" aria-label="速度キャラクター"></canvas>
         <div><b id="charLabel">—</b><div id="charSub" class="small muted"></div><div class="small muted">GPS 速度に合わせた演出です。乗り物を判定したものではありません。</div></div></div>
       <div class="cards" id="cards"></div>
-      <div class="panel"><h2>セル変更の履歴</h2><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
+      <div class="panel"><h2>セル変更の履歴</h2><p class="help">「接続アンテナエリアの変化（推定）」は、記録された在圏セルの識別情報の変化から推定したものです。物理的な電波塔やアンテナの切り替えを確定するものではありません。</p><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
       ${cfg.travelModes ? `<div class="panel small"><label>移動手段メモ（表示用・自動判定しません） <select id="travelMode">${cfg.travelModes.map(m => `<option>${esc(m)}</option>`).join("")}</select></label></div>` : ""}
     </section>
   </div>
@@ -134,6 +137,15 @@ const KRLApp = (() => {
       <span id="rangeLabel"></span>
       <button id="rangeReset" type="button">全期間</button>
     </div>
+    <div class="toolbar replay" id="replay" role="group" aria-label="CSV の再生">
+      <button id="playStart" type="button" aria-label="先頭へ">⏮ 先頭</button>
+      <button id="playToggle" type="button" aria-label="再生" aria-pressed="false">▶ 再生</button>
+      <button id="playEnd" type="button" aria-label="末尾へ">⏭ 末尾</button>
+      <label>速度 <select id="playSpeed"><option value="0.5">0.5 倍</option><option value="1" selected>1 倍</option><option value="2">2 倍</option><option value="5">5 倍</option></select></label>
+      <input type="range" id="cursor" min="0" max="10000" value="0" aria-label="再生位置の時刻">
+      <span id="cursorLabel"></span>
+      <span class="small muted">スペース: 再生・一時停止　← →: 1 秒（Shift で 10 秒）</span>
+    </div>
     <div class="toolbar hidden" id="liveRange">
       <label>直近 <select id="liveWindow"><option value="300000">5 分</option><option value="600000" selected>10 分</option><option value="1800000">30 分</option><option value="3600000">60 分</option></select></label>
       <span class="muted">BLE の履歴はメモリ上に最大 2 時間分だけ保持します。</span>
@@ -145,7 +157,7 @@ const KRLApp = (() => {
       <div><h3>HTTP 応答時間 [ms]（DNS・TCP・TLS・HTTP を含む総所要時間）</h3><canvas id="chHttp" class="chart"></canvas><p class="small muted">● 成功　▲ HTTP エラー　× タイムアウト・失敗</p></div>
     </div>
     <h3>セル変更の時系列</h3><canvas id="chLane" class="chart lane"></canvas>
-    <p class="small muted">◆ 観測変更候補（縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。</p>
+    <p class="small muted">◆ 接続アンテナエリアの変化（推定、縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。</p>
   </section>
   <details class="panel sensors" id="sensorsPanel"><summary><h2>補助センサー（加速度・気圧）</h2></summary>
     <p class="small muted" id="sensorNote"></p>
@@ -297,9 +309,9 @@ const KRLApp = (() => {
     if (!s) { table.innerHTML = ""; return; }
     const rows = s.changes.filter(c => inWin(c.t)).slice().reverse();
     if (!rows.length) { table.innerHTML = `<tr><td class="muted">この時間帯にセルイベントはありません</td></tr>`; return; }
-    const label = { switched: "観測変更候補", baseline: "基準", indeterminate: "判定不能" };
+    const label = { switched: "接続アンテナエリアの変化（推定）", baseline: "基準", indeterminate: "判定不能" };
     table.innerHTML = "<thead><tr><th>時刻 (JST)</th><th>種別</th><th>セル</th><th>経路</th></tr></thead><tbody>" + rows.map(c =>
-      `<tr class="clickable${st.selectedT === c.t ? " selected" : ""}" data-t="${c.t}"><td>${K.jstClock(c.t)}</td>` +
+      `<tr class="clickable${st.selectedT === c.t ? " selected" : ""}${st.view === "csv" && st.selectedT !== null && c.t > st.selectedT ? " future" : ""}" data-t="${c.t}"><td>${K.jstClock(c.t)}</td>` +
       `<td><span class="chip ${esc(c.status)}">${esc(label[c.status] ?? c.status)}</span>${c.missed ? `<div class="small muted">間に ${c.missed} 件の見逃し</div>` : ""}</td>` +
       `<td>${c.from ? esc(cellName(s, c.from)) + " → " : ""}${esc(cellName(s, c.to) ?? "")}</td><td>${esc(c.src ?? "—")}</td></tr>`).join("") + "</tbody>";
   }
@@ -408,16 +420,25 @@ const KRLApp = (() => {
         ctx.fillStyle = mapOn ? "rgba(194,24,91,0.10)" : "rgba(77,208,225,0.10)"; ctx.fill();
       }
     }
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    for (const [color, width] of [[edge, 9], [casing, 7], [core, 4]]) {
-      ctx.strokeStyle = color; ctx.lineWidth = width;
-      for (let i = 1; i < pts.length; i++) {
-        if (pts[i].t - pts[i - 1].t > K.GPS_GAP_MS) continue;
-        const [x1, y1] = toScreen(pts[i - 1], w, h), [x2, y2] = toScreen(pts[i], w, h);
-        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // CSV replay: the whole track stays faint, the part up to the cursor is emphasised, and the
+    // "current" position is the last fix at or before the cursor (nothing from the future).
+    const cursor = st.view === "csv" ? st.selectedT : null;
+    const isPast = t => cursor === null || t <= cursor;
+    const past = pts.filter(p => isPast(p.t));
+    const segments = (list, layers) => {
+      for (const [color, width] of layers) {
+        ctx.strokeStyle = color; ctx.lineWidth = width;
+        for (let i = 1; i < list.length; i++) {
+          if (list[i].t - list[i - 1].t > K.GPS_GAP_MS) continue;
+          const [x1, y1] = toScreen(list[i - 1], w, h), [x2, y2] = toScreen(list[i], w, h);
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        }
       }
-    }
-    for (const p of pts) {
+    };
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    if (cursor !== null) { ctx.globalAlpha = 0.35; segments(pts, [[core, 3]]); ctx.globalAlpha = 1; }
+    segments(past, [[edge, 9], [casing, 7], [core, 4]]);
+    for (const p of past) {
       const [x, y] = toScreen(p, w, h);
       ctx.beginPath(); ctx.arc(x, y, lowAcc(p) ? 4.5 : 3, 0, Math.PI * 2);
       ctx.fillStyle = lowAcc(p) ? casing : core; ctx.fill();
@@ -427,6 +448,7 @@ const KRLApp = (() => {
       if (c.status !== "switched" || !inWin(c.t)) continue;
       const p = K.nearestByTime(s.gps, c.t, K.NEAR_MS); if (!p) continue;
       const [x, y] = toScreen(p, w, h);
+      ctx.globalAlpha = isPast(c.t) ? 1 : 0.3;
       ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x + 9, y); ctx.lineTo(x, y + 9); ctx.lineTo(x - 9, y); ctx.closePath();
       ctx.fillStyle = css("--change"); ctx.fill(); ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5; ctx.stroke();
     }
@@ -434,16 +456,22 @@ const KRLApp = (() => {
       if (pr.status === "ok" || !inWin(pr.t)) continue;
       const p = K.nearestByTime(s.gps, pr.t, K.NEAR_MS); if (!p) continue;
       const [x, y] = toScreen(p, w, h);
+      ctx.globalAlpha = isPast(pr.t) ? 1 : 0.3;
       ctx.strokeStyle = css("--bad"); ctx.lineWidth = 3;
       ctx.beginPath(); ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6); ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6); ctx.stroke();
     }
-    // Latest (or selected) position; grey when it is not current.
-    const last = pts[pts.length - 1];
-    const lastStale = st.view === "ble" ? (liveStale() || Date.now() - st.live.last.receivedAt + (st.live.last.payload.t - last.t) > STALE_MS) : false;
-    const [lx, ly] = toScreen(last, w, h);
-    ctx.beginPath(); ctx.arc(lx, ly, 11, 0, Math.PI * 2); ctx.fillStyle = casing; ctx.fill();
-    ctx.beginPath(); ctx.arc(lx, ly, 9, 0, Math.PI * 2); ctx.lineWidth = 4; ctx.strokeStyle = lastStale ? "#8e99a4" : css("--bad"); ctx.stroke();
-    if (st.selectedT !== null) {
+    ctx.globalAlpha = 1;
+    // Current position (latest fix, or the last fix before the replay cursor); grey when not current.
+    const last = past.length ? past[past.length - 1] : null;
+    const lastStale = !last ? true
+      : st.view === "ble" ? (liveStale() || Date.now() - st.live.last.receivedAt + (st.live.last.payload.t - last.t) > STALE_MS)
+      : cursor !== null && cursor - last.t > STALE_MS;
+    if (last) {
+      const [lx, ly] = toScreen(last, w, h);
+      ctx.beginPath(); ctx.arc(lx, ly, 11, 0, Math.PI * 2); ctx.fillStyle = casing; ctx.fill();
+      ctx.beginPath(); ctx.arc(lx, ly, 9, 0, Math.PI * 2); ctx.lineWidth = 4; ctx.strokeStyle = lastStale ? "#8e99a4" : css("--bad"); ctx.stroke();
+    }
+    if (st.selectedT !== null && st.view !== "csv") {
       const p = K.nearestByTime(s.gps, st.selectedT, K.NEAR_MS);
       if (p && inWin(p.t)) {
         const [x, y] = toScreen(p, w, h);
@@ -451,14 +479,16 @@ const KRLApp = (() => {
       }
     }
     // Scale bar (top-left, away from the attribution).
-    const mpp = K.merc.metersPerPx0(last.lat) / st.map.view.scale;
+    const mpp = K.merc.metersPerPx0((last ?? pts[pts.length - 1]).lat) / st.map.view.scale;
     const nice = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
     const m = nice.find(v => v / mpp >= 70) || nice[nice.length - 1];
     ctx.fillStyle = mapOn ? "rgba(255,255,255,.85)" : "rgba(0,0,0,.5)"; ctx.fillRect(6, 6, m / mpp + 16, 30);
     ctx.strokeStyle = mapOn ? "#222" : "#eee"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(14, 28); ctx.lineTo(14 + m / mpp, 28); ctx.stroke();
     ctx.fillStyle = mapOn ? "#222" : "#eee"; ctx.font = "12px system-ui"; ctx.fillText(m >= 1000 ? `${m / 1000} km` : `${m} m`, 14, 22);
-    $("mapStatus").textContent = lastStale ? "最新位置は古い値です（灰色）" : "";
+    $("mapStatus").textContent = !last ? "この時刻までに測位なし"
+      : lastStale ? (cursor !== null ? "再生位置の時点で GPS 更新なし（灰色は最後の位置）" : "最新位置は古い値です（灰色）")
+      : cursor !== null ? "薄い線は再生位置より後の軌跡" : "";
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -491,7 +521,7 @@ const KRLApp = (() => {
       ctx.fillText(label, Math.min(Math.max(x - tw / 2, PAD.l), w - tw - 2), h - 7);
     }
   }
-  function verticals(ctx, h, sc) {
+  function verticals(ctx, w, h, sc) {
     const s = session();
     ctx.save();
     for (const c of s.changes) {
@@ -512,10 +542,18 @@ const KRLApp = (() => {
       ctx.fillStyle = css("--memo"); ctx.font = "10px system-ui"; ctx.fillText(`実測 ${m.label}`, sc.sx(m.t) + 3, h - PAD.b - 4);
     }
     if (st.selectedT !== null && inWin(st.selectedT)) {
+      const x = sc.sx(st.selectedT);
       ctx.setLineDash([]); ctx.strokeStyle = css("--fg"); ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(sc.sx(st.selectedT), PAD.t); ctx.lineTo(sc.sx(st.selectedT), h - PAD.b); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, h - PAD.b); ctx.stroke();
     }
     ctx.restore();
+  }
+  /** CSV replay: shade the part after the cursor (drawn over the data) so it does not read as "now". */
+  function shadeFuture(ctx, w, h, sc) {
+    if (st.view !== "csv" || st.selectedT === null || !inWin(st.selectedT)) return;
+    const x = sc.sx(st.selectedT);
+    ctx.fillStyle = "rgba(13,18,24,0.5)";
+    ctx.fillRect(x + 1, PAD.t, w - PAD.r - x - 1, h - PAD.t - PAD.b);
   }
   function mark(ctx, kind, x, y, color) {
     ctx.fillStyle = color; ctx.strokeStyle = color;
@@ -531,13 +569,13 @@ const KRLApp = (() => {
     if (!s) return emptyNote(ctx, w, h, "データ未読み込み");
     let vis = series.map(se => ({ ...se, pts: se.pts.filter(p => p.v !== null && Number.isFinite(p.v) && inWin(p.t)) }));
     const vals = vis.flatMap(se => se.pts.map(p => p.v));
-    if (!vals.length) { emptyNote(ctx, w, h, emptyText); const sc = scales(w, h, 0, 1); verticals(ctx, h, sc); return; }
+    if (!vals.length) { emptyNote(ctx, w, h, emptyText); const sc = scales(w, h, 0, 1); verticals(ctx, w, h, sc); return; }
     let yMin = Math.min(...vals), yMax = Math.max(...vals);
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1; }
     const pad = (yMax - yMin) * 0.1; yMin -= pad; yMax += pad;
     const sc = scales(w, h, yMin, yMax);
     axes(ctx, w, h, sc, yMin, yMax, unit);
-    verticals(ctx, h, sc);
+    verticals(ctx, w, h, sc);
     // Dense series (20 Hz sensors) are drawn as a per-pixel min/max envelope; the data is untouched.
     vis = vis.map(se => (se.downsample && se.pts.length > 2 * w ? { ...se, pts: envelope(se.pts, sc) } : se));
     for (const se of vis) {
@@ -552,6 +590,7 @@ const KRLApp = (() => {
       }
       if (!se.noMarks) for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);
     }
+    shadeFuture(ctx, w, h, sc);
   }
   function envelope(pts, sc) {
     const out = [];
@@ -592,7 +631,7 @@ const KRLApp = (() => {
     if (!s) return emptyNote(ctx, w, h, "データ未読み込み");
     const sc = scales(w, h, 0, 1);
     axes(ctx, w, h, { ...sc, sy: () => -100 }, 0, 1, "");
-    verticals(ctx, h, sc);
+    verticals(ctx, w, h, sc);
     const vis = s.changes.filter(c => inWin(c.t));
     if (!vis.length) { emptyNote(ctx, w, h - 12, K.cellDiagnosis(s).key === "no_serving" ? "在圏セルを取得できず（判定できません）" : "この時間帯にセルイベントはありません"); return; }
     const y = (h - PAD.b) / 2 + 4;
@@ -606,6 +645,7 @@ const KRLApp = (() => {
         if (c.status === "baseline") { ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui"; ctx.fillText(`基準 ${cellName(s, c.to) ?? ""}`, x + 9, y + 4); }
       }
     }
+    shadeFuture(ctx, w, h, sc);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -692,16 +732,75 @@ const KRLApp = (() => {
 
   // ---------------------------------------------------------------------------------------------
   function render() {
-    renderHeader(); renderRoute(); renderCards(); renderCharacter(); renderHistory(); drawMap(); renderCharts(); renderSensors(); renderSelection();
+    renderHeader(); renderReplay(); renderRoute(); renderCards(); renderCharacter(); renderHistory(); drawMap(); renderCharts(); renderSensors(); renderSelection();
     const s = session();
     if (st.view === "csv" && s) {
       const [a, b] = windowRange();
       $("rangeLabel").textContent = `${K.jstClock(a)} 〜 ${K.jstClock(b)} JST`;
     }
   }
-  function select(t) { st.selectedT = t; render(); }
+  function select(t) { st.selectedT = t; clampCursor(); render(); }
   function setView(v) {
-    st.view = v; st.selectedT = null; st.map.view = null; st.map.userMoved = false; render();
+    pause();
+    if (st.view === "csv") st.csvT = st.selectedT;
+    st.view = v; st.map.view = null; st.map.userMoved = false;
+    // The CSV cursor is restored when coming back; BLE keeps its live behaviour (no cursor).
+    st.selectedT = v === "csv" ? st.csvT : null;
+    if (v === "csv" && st.selectedT === null && st.csv) st.selectedT = windowRange()[0];
+    clampCursor();
+    render();
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // CSV replay: one cursor (st.selectedT) inside the visible range, advanced by real elapsed time
+  // multiplied by the speed, so uneven event density still plays in recorded time.
+  function clampCursor() {
+    if (st.view !== "csv" || st.selectedT === null) return;
+    const [a, b] = windowRange();
+    st.selectedT = Math.min(Math.max(st.selectedT, a), b);
+  }
+  function setCursor(t) { st.selectedT = t; clampCursor(); render(); }
+  function play() {
+    if (st.view !== "csv" || !st.csv) return;
+    const [a, b] = windowRange();
+    if (st.selectedT === null || st.selectedT >= b) st.selectedT = a;
+    st.play.playing = true;
+    st.play.lastReal = performance.now();
+    st.play.timer = setTimeout(playStep, PLAY_TICK_MS);
+    render();
+  }
+  function pause() {
+    st.play.playing = false;
+    clearTimeout(st.play.timer);
+    st.play.timer = null;
+    if (cfg && $("playToggle")) renderReplay();
+  }
+  function playStep() {
+    if (!st.play.playing) return;
+    const now = performance.now();
+    advance((now - st.play.lastReal) * st.play.speed);
+    st.play.lastReal = now;
+    if (st.play.playing) st.play.timer = setTimeout(playStep, PLAY_TICK_MS);
+  }
+  /** Moves the cursor by [ms] of recorded time; stops at the end of the range. */
+  function advance(ms) {
+    const [a, b] = windowRange();
+    const t = (st.selectedT ?? a) + ms;
+    if (t >= b) { st.selectedT = b; pause(); } else st.selectedT = Math.max(a, t);
+    render();
+  }
+  function renderReplay() {
+    const csv = st.view === "csv" && !!st.csv;
+    $("replay").classList.toggle("hidden", !csv);
+    if (!csv) return;
+    const [a, b] = windowRange();
+    const t = st.selectedT ?? a;
+    $("cursor").value = String(Math.round((t - a) / (b - a) * 10000));
+    $("cursorLabel").textContent = `${K.jstClock(t)} JST（開始から ${fmtElapsed(t - st.csv.t0)}）`;
+    const toggle = $("playToggle");
+    toggle.textContent = st.play.playing ? "⏸ 一時停止" : "▶ 再生";
+    toggle.setAttribute("aria-label", st.play.playing ? "一時停止" : "再生");
+    toggle.setAttribute("aria-pressed", String(st.play.playing));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -736,6 +835,9 @@ const KRLApp = (() => {
     if (!s.hasCellColumns || !s.counts.cell) msgs.push(["warn", "セル情報（cell 行）がありません。"]);
     if (s.unknownEvents.length) msgs.push(["", `未対応のイベント種別は集計のみ: ${s.unknownEvents.join(", ")}`]);
     message(msgs);
+    pause();
+    st.csvT = null;              // a new CSV starts at the beginning of its range
+    if (st.view === "csv") st.view = "none";
     setView("csv");
   }
 
@@ -823,11 +925,34 @@ const KRLApp = (() => {
       if (b - a < 0.001) { if (this === $("rangeStart")) a = b - 0.001; else b = a + 0.001; }
       st.range = [Math.max(0, a), Math.min(1, b)];
       st.map.view = null;
+      clampCursor();             // a cursor outside the new range moves to the nearest end
       render();
     };
     $("rangeStart").addEventListener("input", onRange);
     $("rangeEnd").addEventListener("input", onRange);
-    $("rangeReset").addEventListener("click", () => { st.range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000; st.map.view = null; render(); });
+    $("rangeReset").addEventListener("click", () => { st.range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000; st.map.view = null; clampCursor(); render(); });
+
+    // Replay controls (CSV only).
+    $("playToggle").addEventListener("click", () => (st.play.playing ? pause() : play()));
+    $("playStart").addEventListener("click", () => { pause(); setCursor(windowRange()[0]); });
+    $("playEnd").addEventListener("click", () => { pause(); setCursor(windowRange()[1]); });
+    $("playSpeed").addEventListener("input", e => { st.play.speed = Number(e.target.value) || 1; });
+    $("cursor").addEventListener("input", e => {
+      const [a, b] = windowRange();
+      setCursor(a + Number(e.target.value) / 10000 * (b - a));
+    });
+    document.addEventListener("keydown", e => {
+      if (st.view !== "csv" || !st.csv || e.altKey || e.ctrlKey || e.metaKey) return;
+      // Leave keys alone while a control has focus (buttons, sliders, selects, inputs).
+      const el = e.target;
+      if (el && (el.isContentEditable || /^(BUTTON|INPUT|SELECT|TEXTAREA|SUMMARY|A)$/.test(el.tagName))) return;
+      if (e.key === " " || e.code === "Space") { e.preventDefault(); st.play.playing ? pause() : play(); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const step = (e.shiftKey ? 10000 : 1000) * (e.key === "ArrowLeft" ? -1 : 1);
+        setCursor((st.selectedT ?? windowRange()[0]) + step);
+      }
+    });
     $("liveWindow").addEventListener("input", e => { st.liveWindowMs = Number(e.target.value); render(); });
     for (const id of ["showMap", "showAcc"]) $(id).addEventListener("input", () => drawMap());
     $("fit").addEventListener("click", () => { st.map.view = null; st.map.userMoved = false; drawMap(); });
@@ -910,5 +1035,5 @@ const KRLApp = (() => {
     render();
   }
 
-  return { start, _state: st };
+  return { start, _state: st, _advance: advance };
 })();
