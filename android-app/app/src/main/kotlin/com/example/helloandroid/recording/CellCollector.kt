@@ -20,6 +20,7 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
+import androidx.annotation.RequiresApi
 import com.example.helloandroid.data.LogEvent
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Executors
@@ -459,6 +460,7 @@ class CellCollector(
     }
 
     /** NR quality metrics (SS- and CSI-based); unavailable values are omitted. */
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun nrMetrics(s: CellSignalStrengthNr): Map<String, Int> = buildMap {
       s.ssRsrq.orNull()?.let { put("nr_ss_rsrq_db", it) }
       s.ssSinr.orNull()?.let { put("nr_ss_sinr_db", it) }
