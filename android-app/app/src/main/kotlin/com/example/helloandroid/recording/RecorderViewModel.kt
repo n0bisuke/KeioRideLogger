@@ -117,7 +117,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         )
         speedClassifier.onFix(loc.elapsedRealtimeNanos, speedMps, accuracyM)
       },
-      onStatus = { label -> _state.update { it.copy(gpsStatus = label) } },
+      onStatus = { gpsState -> _state.update { it.copy(gpsStatus = gpsState.label) } },
     )
 
   private val cell =
@@ -234,6 +234,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     network.start(current.probeEnabled)
     tickerJob = viewModelScope.launch {
       while (isActive) {
+        gps.checkStale(Clock.nowElapsedNs())
         publish()
         delay(UI_REFRESH_MS)
       }

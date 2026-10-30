@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--
-  Local-only viewer. The CSP forbids every network access (fetch, images, fonts, frames), so the
-  CSV and its coordinates cannot leave the browser even by mistake. No external libraries.
+  The CSV is parsed in-browser. OpenStreetMap tiles are requested only for the visible map area;
+  the tile provider can see tile coordinates and the visitor's IP address.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
-<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https://tile.openstreetmap.org; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Keio Ride Logger CSV ビューア</title>
 <style>
   :root {
@@ -44,6 +44,8 @@
   canvas { display: block; width: 100%; background: #0b1015; border-radius: 6px; touch-action: none; }
   #track { height: 460px; cursor: grab; }
   #track.dragging { cursor: grabbing; }
+  .map-attribution { position: absolute; right: 5px; bottom: 5px; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,.88); color: #222; font: 11px/1.5 system-ui, sans-serif; }
+  .map-attribution a { color: #1769aa; }
   .chart { height: 190px; cursor: crosshair; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
   .toolbar label { display: inline-flex; gap: 5px; align-items: center; }
@@ -81,7 +83,7 @@
 <body>
 <header>
   <h1>Keio Ride Logger CSV ビューア</h1>
-  <p class="sub">計測 CSV をこのブラウザの中だけで読み込みます。アップロード・送信・保存はしません（外部への通信はブラウザの設定で禁止しています）。</p>
+  <p class="sub">CSVはブラウザ内で読み込みます。CSVのアップロードはしません。背景地図の表示時は、OpenStreetMapへ表示範囲の地図タイルをリクエストします。</p>
 </header>
 
 <main>
@@ -113,14 +115,15 @@
 
   <div class="main-grid hidden" id="mainGrid">
     <section class="panel" aria-labelledby="h-track">
-      <h2 id="h-track">GPS軌跡・概略</h2>
+      <h2 id="h-track">GPS軌跡・地図</h2>
       <div class="toolbar">
+        <label><input type="checkbox" id="showMap" checked> 背景地図</label>
         <label><input type="checkbox" id="showAcc" checked> 精度の円</label>
         <label><input type="checkbox" id="showChanges" checked> セル変更候補</label>
         <label>低精度とみなす水平精度 <input type="number" id="accLimit" value="30" min="1" step="1" style="width:4.5em"> m</label>
         <button id="fit" type="button">全体を表示</button>
       </div>
-      <div class="canvas-wrap"><canvas id="track" aria-label="GPS軌跡の概略図"></canvas></div>
+      <div class="canvas-wrap"><canvas id="track" aria-label="OpenStreetMap上のGPS軌跡"></canvas><div class="map-attribution" id="trackAttribution"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></div></div>
       <div class="legend">
         <span><i class="k-line"></i>連続した測位（色は速度）</span>
         <span><i class="k-gap"></i>欠測（5 秒超）は線でつなぎません</span>
@@ -129,7 +132,7 @@
         <span><i class="k-diamond"></i>セル変更候補</span>
         <span><i class="k-sel"></i>選択中</span>
       </div>
-      <p class="sub" style="margin-top:6px">GPS の座標そのものを平面に描いた概略図です。背景の地図はなく、駅や線路への補正もしていません。ホイールまたはピンチで拡大、ドラッグで移動、点をクリックで選択できます。</p>
+      <p class="sub" style="margin-top:6px">CSVはブラウザ内で解析します。背景地図の表示時は、地図提供元へ表示範囲のタイル座標とIPアドレスが送信されます。CSVや正確な測位点を送ることはありません。GPS軌跡は生の座標で、駅や線路への補正はしていません。ホイールまたはピンチで拡大、ドラッグで移動できます。</p>
     </section>
 
     <section class="panel detail" aria-labelledby="h-sel">
@@ -176,6 +179,9 @@ let selectedT = null;              // selected absolute time (ms)
 let range = [0, 1];                // visible window, fractions of the session
 let trackView = null;              // {scale, cx, cy} map transform
 let trackFit = null;
+let trackOrigin = null;
+const mapTiles = new Map();
+const MAP_TILE_URL = "https://tile.openstreetmap.org";
 
 // ---------------------------------------------------------------------------
 // CSV parsing: RFC 4180 style quotes (commas, LF/CRLF and "" inside quoted fields).
@@ -391,13 +397,14 @@ function emptyNote(ctx, w, h, text) {
 }
 
 // ---------------------------------------------------------------------------
-// GPS track ("map-like" plot of raw coordinates, local equirectangular projection).
+// GPS track in a local equirectangular projection, with optional OpenStreetMap tiles underneath.
 const EARTH_R = 6371008.8;
 function projectGps() {
   if (!S.gps.length) return;
   const lat0 = S.gps.reduce((a, p) => a + p.lat, 0) / S.gps.length;
   const lon0 = S.gps.reduce((a, p) => a + p.lon, 0) / S.gps.length;
   const k = Math.PI / 180, cosLat = Math.cos(lat0 * k);
+  trackOrigin = { lat: lat0, lon: lon0, cosLat };
   for (const p of S.gps) { p.x = (p.lon - lon0) * k * EARTH_R * cosLat; p.y = (p.lat - lat0) * k * EARTH_R; }
 }
 function fitTrack(points) {
@@ -422,12 +429,63 @@ function nearestGps(t) {
   return Math.abs(best.t - t) <= NEAR_MS ? best : null;
 }
 
+function drawMapTiles(ctx, w, h) {
+  if (!$('showMap').checked || !trackOrigin || !trackView) return;
+  ctx.fillStyle = "#e8e5dc"; ctx.fillRect(0, 0, w, h);
+  const zoom = Math.max(0, Math.min(19, Math.round(Math.log2(trackView.scale * 156543.03392 * trackOrigin.cosLat))));
+  const n = 2 ** zoom, worldMeters = 2 * Math.PI * EARTH_R;
+  const tileMeters = worldMeters * trackOrigin.cosLat / n;
+  const tilePixels = tileMeters * trackView.scale;
+  if (!Number.isFinite(tilePixels) || tilePixels <= 0) return;
+  const centerLat = Math.max(-85.05112878, Math.min(85.05112878, trackOrigin.lat + trackView.cy / EARTH_R * 180 / Math.PI));
+  const centerLon = trackOrigin.lon + trackView.cx / (EARTH_R * trackOrigin.cosLat) * 180 / Math.PI;
+  const centerX = (centerLon + 180) / 360 * n;
+  const centerY = (1 - Math.asinh(Math.tan(centerLat * Math.PI / 180)) / Math.PI) / 2 * n;
+  const minX = Math.floor(centerX - w / (2 * tilePixels)) - 1;
+  const maxX = Math.floor(centerX + w / (2 * tilePixels)) + 1;
+  const minY = Math.floor(centerY - h / (2 * tilePixels)) - 1;
+  const maxY = Math.floor(centerY + h / (2 * tilePixels)) + 1;
+  let visibleTileFailed = false;
+  for (let ty = minY; ty <= maxY; ty++) {
+    if (ty < 0 || ty >= n) continue;
+    for (let tx = minX; tx <= maxX; tx++) {
+      const wrappedX = ((tx % n) + n) % n;
+      const key = `${zoom}/${wrappedX}/${ty}`;
+      let tile = mapTiles.get(key);
+      if (!tile) {
+        tile = new Image(); tile.loaded = false; tile.failed = false;
+        tile.onload = () => { tile.loaded = true; if (S && $('showMap').checked) drawTrack(); };
+        tile.onerror = () => { tile.failed = true; if (S && $("showMap").checked) drawTrack(); };
+        mapTiles.set(key, tile);
+        tile.src = `${MAP_TILE_URL}/${key}.png`;
+      }
+      if (tile.failed) visibleTileFailed = true;
+      if (tile.loaded) {
+        const lon = ((tx + 0.5) / n) * 360 - 180;
+        const mercY = Math.PI * (1 - 2 * (ty + 0.5) / n);
+        const lat = Math.atan(Math.sinh(mercY)) * 180 / Math.PI;
+        const x = (lon - trackOrigin.lon) * Math.PI / 180 * EARTH_R * trackOrigin.cosLat;
+        const y = (lat - trackOrigin.lat) * Math.PI / 180 * EARTH_R;
+        const [sx, sy] = toScreen({ x, y }, w, h);
+        ctx.drawImage(tile, sx - tilePixels / 2, sy - tilePixels / 2, tilePixels, tilePixels);
+      }
+    }
+  }
+  if (visibleTileFailed) {
+    ctx.fillStyle = "rgba(15,20,25,.88)"; ctx.fillRect(8, 8, 228, 26);
+    ctx.fillStyle = "#fff"; ctx.font = "12px system-ui"; ctx.fillText("地図タイルを取得できません。軌跡は表示します。", 14, 25);
+  }
+}
+
 function drawTrack() {
   const canvas = $("track");
   const { ctx, w, h } = setupCanvas(canvas);
+  $("trackAttribution").hidden = true;
   if (!S.gps.length) { emptyNote(ctx, w, h, "GPS の測位データがありません（gps 行なし）"); return; }
   const pts = S.gps.filter(p => visible(p.t));
+  $("trackAttribution").hidden = !($("showMap").checked && pts.length);
   if (!pts.length) { emptyNote(ctx, w, h, "この時間帯には GPS の測位点がありません"); return; }
+  drawMapTiles(ctx, w, h);
   const accLimit = Number($("accLimit").value) || 30;
   const vmax = Math.max(1, ...S.gps.map(p => p.kmh ?? 0));
 
@@ -740,7 +798,7 @@ function onRangeInput() {
 $("rangeStart").addEventListener("input", onRangeInput);
 $("rangeEnd").addEventListener("input", onRangeInput);
 $("rangeReset").addEventListener("click", () => { range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000; redraw(); });
-for (const id of ["showAcc", "showChanges", "accLimit", "showNeighbors"]) $(id).addEventListener("input", redraw);
+for (const id of ["showMap", "showAcc", "showChanges", "accLimit", "showNeighbors"]) $(id).addEventListener("input", redraw);
 $("fit").addEventListener("click", () => { if (S) { fitTrack(S.gps.filter(p => visible(p.t))); redraw(); } });
 
 // Track: pan (drag), zoom (wheel / pinch), select (click).

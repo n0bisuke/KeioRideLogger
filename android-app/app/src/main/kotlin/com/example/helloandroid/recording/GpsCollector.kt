@@ -10,18 +10,24 @@ import android.location.LocationManager
 import android.os.Looper
 import com.example.helloandroid.data.LogEvent
 
-/** GNSS fixes from the platform GPS provider at ~1 s. Uses no network location services. */
+/**
+ * GNSS fixes from the platform GPS provider at ~1 s. Uses no network location services.
+ * All callbacks and [checkStale] run on the main thread.
+ */
 class GpsCollector(
   private val context: Context,
   private val sink: (LogEvent) -> Unit,
   private val onFix: (Location) -> Unit,
-  private val onStatus: (String) -> Unit,
+  private val onStatus: (GpsState) -> Unit,
 ) {
   private val locationManager = context.getSystemService(LocationManager::class.java)
+  private val tracker = GpsStatusTracker()
 
   private val listener =
     object : LocationListener {
       override fun onLocationChanged(location: Location) {
+        // State row first, so "fix_acquired" precedes the first gps row of a run.
+        tracker.onFix(location.elapsedRealtimeNanos)?.let(::report)
         val values = buildMap {
           put("lat", location.latitude.toString())
           put("lon", location.longitude.toString())
@@ -35,21 +41,30 @@ class GpsCollector(
         onFix(location)
       }
 
-      override fun onProviderEnabled(provider: String) = status("provider_enabled", "受信待ち")
+      override fun onProviderEnabled(provider: String) {
+        tracker.onProviderEnabled()?.let(::report)
+      }
 
-      override fun onProviderDisabled(provider: String) = status("provider_disabled", "位置情報がオフ")
+      override fun onProviderDisabled(provider: String) {
+        tracker.onProviderDisabled()?.let(::report)
+      }
     }
 
-  private fun status(status: String, label: String) {
+  private fun report(state: GpsState) {
     sink(
       LogEvent(
         Clock.nowUtcMs(),
         Clock.nowElapsedNs(),
         "gps_status",
-        mapOf("status" to status, "provider" to LocationManager.GPS_PROVIDER),
+        mapOf("status" to state.csv, "provider" to LocationManager.GPS_PROVIDER),
       )
     )
-    onStatus(label)
+    onStatus(state)
+  }
+
+  /** Marks the status stale when fixes stopped arriving; call periodically while recording. */
+  fun checkStale(nowNs: Long) {
+    tracker.check(nowNs)?.let(::report)
   }
 
   @SuppressLint("MissingPermission") // Checked explicitly below.
@@ -57,29 +72,17 @@ class GpsCollector(
     val granted =
       context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
-    when {
-      !granted -> status("permission_denied", "権限なし")
-      locationManager == null ||
-        LocationManager.GPS_PROVIDER !in locationManager.allProviders ->
-        status("unavailable", "GPS なし")
-      else -> {
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-          status("waiting", "受信待ち")
-        } else {
-          status("provider_disabled", "位置情報がオフ")
-        }
-        try {
-          locationManager.requestLocationUpdates(
-            LocationManager.GPS_PROVIDER,
-            1_000L,
-            0f,
-            listener,
-            looper,
-          )
-        } catch (e: SecurityException) {
-          status("permission_denied", "権限なし")
-        }
-      }
+    val available = locationManager != null && LocationManager.GPS_PROVIDER in locationManager.allProviders
+    val enabled = available && locationManager!!.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    val initial = tracker.start(granted, available, enabled)
+    report(initial)
+    if (initial == GpsState.PERMISSION_DENIED || initial == GpsState.UNAVAILABLE) return
+    try {
+      // Registered even when location is off, so turning it on resumes recording.
+      locationManager!!.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1_000L, 0f, listener, looper)
+    } catch (e: SecurityException) {
+      tracker.start(false, available, enabled)
+      report(GpsState.PERMISSION_DENIED)
     }
   }
 

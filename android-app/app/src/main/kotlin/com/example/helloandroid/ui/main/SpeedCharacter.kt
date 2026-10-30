@@ -17,7 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -50,9 +50,9 @@ internal fun spriteFrame(sheetWidth: Int, sheetHeight: Int, index: Int): Pair<In
  */
 @Composable
 fun SpeedCharacter(speed: SpeedDisplay, recording: Boolean, frozen: Boolean, modifier: Modifier = Modifier) {
-  val resources = LocalContext.current.resources
+  val resources = LocalResources.current
   // A failed decode must not crash the screen; fall back to text only.
-  val sheet: ImageBitmap? = remember { runCatching { ImageBitmap.imageResource(resources, R.drawable.glider_speed_sheet) }.getOrNull() }
+  val sheet: ImageBitmap? = remember(resources) { runCatching { ImageBitmap.imageResource(resources, R.drawable.glider_speed_sheet) }.getOrNull() }
   val band = if (recording) speed.band else null
   val caption =
     when {

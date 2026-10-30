@@ -63,3 +63,11 @@
 - 2026-10-30 の修正後: Docker 内で `testDebugUnitTest`（16 件合格）、`assembleDebug`、`compileDebugAndroidTestKotlin`、`lintDebug`（エラー 0）を実行済み。UI テストの実行と実機確認は未実施。
 - 2026-10-30 の2回目の修正後（切り替わり判定、電波品質、通信経路・応答時間、軌跡ビューア）: Docker 内で `testDebugUnitTest`（25 件合格）、`assembleDebug`、`compileDebugAndroidTestKotlin`、`lintDebug`（エラー 0）を実行済み。UI テストの実行、実機確認、軌跡ビューアのブラウザでの確認は未実施。
 - 修正後は親`AGENTS.md`に従ってDocker内でビルドし、既存テストを実行する。実機でしか確認できない項目は別に報告する。
+
+### ライブ可視化の実機画面（2026-10-30 22:45）
+
+- 実機画面はライブ可視化までスクロールされていた。GPS軌跡と速度グラフが表示され、速度はほぼ0。屋内/停止に近い確認として矛盾しない。
+- 在圏セルの電波品質（RSRP、RSRQ/SINR系）に値が表示された。既定ネットワークはWi-Fi・接続確認済みで、HTTPプローブの最終結果も更新されていた。したがって、この画面のHTTP応答時間は携帯網ではなくWi-Fi経由の値。
+- RSRPグラフはおよそ−62〜−66 dBm。コード上、グラフは`CellSnapshot.serving`（登録済みセル）から作られ、LTEではAndroidの`CellSignalStrengthLte.rsrp`をdBm値として扱う。表示範囲はAndroid APIの有効範囲（−140〜−43 dBm）に入り、強い電波として妥当な値に見える。
+- 複数のライブグラフで横軸の時間目盛り文字が下端で欠けて見えた。修正タスクを[`ROADMAP.md`](ROADMAP.md)に追加。
+- 画面上の座標、Cell ID、CSVデータは保存しない。

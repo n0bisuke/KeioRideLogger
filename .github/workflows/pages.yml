@@ -1,6 +1,6 @@
 # Publishes the local CSV viewer (web/csv-visualizer/) to GitHub Pages.
 # Only that directory is uploaded: no measurement data, logs or app sources are published.
-# The page parses CSVs in the visitor's browser and its CSP blocks all network access.
+# The page parses CSVs in the visitor's browser; CSP allows only OpenStreetMap tile images.
 name: Deploy CSV viewer to GitHub Pages
 
 on:
@@ -23,12 +23,13 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Keep the runner image stable instead of inheriting the ubuntu-latest migration schedule.
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5.1.0
 
       - name: Refuse to publish data files
         run: |
@@ -38,11 +39,11 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web/csv-visualizer
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
