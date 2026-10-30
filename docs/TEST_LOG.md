@@ -126,3 +126,10 @@
 - 検証（Docker 内）: `assembleDebug`、`testDebugUnitTest`（66 件合格、うち BLE プロトコル 12 件）、`compileDebugAndroidTestKotlin`、`lintDebug`（エラー 0、警告 7 件は既存のバージョン通知など）。ブラウザ側は Node v26 で、プロトコルのテストと、偽の Web Bluetooth 端末による通しテストに合格。
 - **未確認**: Android 実機での広告・接続・通知、実ブラウザ（Chrome）での Web Bluetooth、MTU と実際の通知サイズ、DevTools での通信の確認、地図修正後の実機表示。
 - テストデータは架空の座標（緯度 10 度、経度 20 度）と架空の Cell ID だけを使った。実機の CSV・座標・Cell ID はこのログにもリポジトリにも含めていない。
+
+### CSV 記録のオン・オフとアプリ内 CSV の一括削除（2026-10-30、Claude Code）
+
+- 計測開始前の「CSV に記録する」選択、アプリ内のセッション CSV の一覧、確認付きの一括削除を実装した。内容は [`ROADMAP.md`](ROADMAP.md) の該当タスクに記載。
+- 検証（Docker 内）: `assembleDebug`、`testDebugUnitTest`（72 件合格、うち `SessionStoreTest` 6 件）、`compileDebugAndroidTestKotlin`（UI テスト 3 件を追加）、`lintDebug`（エラー 0）。
+- **未確認**: 実機での記録オン・オフ、一覧、一括削除、書き出したコピーが残ること。UI テストの実行（エミュレータなし）。
+- テストに使ったファイルは一時ディレクトリに作った架空のものだけで、実機の CSV は使っていない。

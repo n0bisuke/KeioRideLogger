@@ -1,6 +1,7 @@
 # LT資料案: 京王ライナーでAndroid計測、ブラウザでライブ可視化
 
 発表や画面に出る専門用語は、補足資料の[用語集](glossary.md)を参照。
+Web画面の実装要件は[LTデモ用Webダッシュボード要件](web-dashboard-requirements.md)にまとめる。
 
 ## 発表で伝えたいこと
 

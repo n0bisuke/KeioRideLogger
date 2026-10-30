@@ -63,6 +63,8 @@ class MainActivity : ComponentActivity() {
             onProbeEnabledChange = recorder::setProbeEnabled,
             mapTiles = recorder.mapTiles,
             onMapEnabledChange = recorder::setMapEnabled,
+            onCsvEnabledChange = recorder::setCsvEnabled,
+            onDeleteAllSessionFiles = recorder::deleteAllSessionFiles,
             onBleEnabledChange = { enabled ->
               val missing =
                 BleShareController.requiredPermissions().filter {

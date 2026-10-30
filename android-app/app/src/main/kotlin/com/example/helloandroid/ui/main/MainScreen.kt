@@ -49,6 +49,8 @@ fun MainScreen(
   mapTiles: MapTiles? = null,
   onMapEnabledChange: (Boolean) -> Unit = {},
   onBleEnabledChange: (Boolean) -> Unit = {},
+  onCsvEnabledChange: (Boolean) -> Unit = {},
+  onDeleteAllSessionFiles: () -> Unit = {},
 ) {
   Column(
     modifier =
@@ -57,7 +59,7 @@ fun MainScreen(
   ) {
     Text("Keio Ride Logger", style = MaterialTheme.typography.headlineSmall)
 
-    StatusCard(state, onStart, onStop, onSave, onProbeEnabledChange)
+    StatusCard(state, onStart, onStop, onSave, onProbeEnabledChange, onCsvEnabledChange)
 
     if (!state.locationGranted || !state.phoneStateGranted) {
       PermissionCard(state, onRequestPermissions)
@@ -66,6 +68,7 @@ fun MainScreen(
     SpeedCharacter(state.speed, state.recording, state.frozen)
     LiveSection(state, mapTiles, onMapEnabledChange)
     BleCard(state, onBleEnabledChange)
+    SessionFilesCard(state, onDeleteAllSessionFiles)
 
     CellCard(state)
     NetworkCard(state)
@@ -90,6 +93,7 @@ private fun StatusCard(
   onStop: () -> Unit,
   onSave: () -> Unit,
   onProbeEnabledChange: (Boolean) -> Unit,
+  onCsvEnabledChange: (Boolean) -> Unit,
 ) {
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -98,7 +102,17 @@ private fun StatusCard(
         style = MaterialTheme.typography.titleLarge,
         color = if (state.recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
       )
-      Text("記録イベント数: ${state.eventCount}")
+      if (state.recording && !state.sessionHasCsv) {
+        Text(
+          "CSV 記録オフ・データは保存されません",
+          color = MaterialTheme.colorScheme.error,
+          fontWeight = FontWeight.Bold,
+        )
+      } else if (state.recording || state.sessionHasCsv) {
+        Text("CSV に記録したイベント数: ${state.eventCount}")
+      } else {
+        Text("前回の計測: CSV 記録なし", style = MaterialTheme.typography.bodyMedium)
+      }
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (state.recording) {
           Button(
@@ -109,10 +123,18 @@ private fun StatusCard(
           }
         } else {
           Button(onClick = onStart) { Text("計測開始") }
-          OutlinedButton(onClick = onSave, enabled = state.savableFileName != null) {
-            Text("CSV を保存")
+          // Hidden (not just disabled) when there is nothing to save, e.g. with CSV off.
+          if (state.savableFileName != null) {
+            OutlinedButton(onClick = onSave, enabled = !state.closingCsv) { Text("CSV を保存") }
           }
         }
+      }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(checked = state.csvEnabled, onCheckedChange = onCsvEnabledChange, enabled = !state.recording)
+        Text(
+          if (state.csvEnabled) "CSV に記録する" else "CSV に記録しない（画面表示と BLE 共有だけ）",
+          style = MaterialTheme.typography.bodyMedium,
+        )
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Switch(

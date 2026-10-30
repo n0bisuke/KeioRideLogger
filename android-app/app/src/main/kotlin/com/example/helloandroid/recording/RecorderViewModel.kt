@@ -71,6 +71,14 @@ data class RecorderUiState(
   val probeOkCount: Int = 0,
   val live: LiveSnapshot = LiveSnapshot(),
   val speed: SpeedDisplay = SpeedDisplay(null, null, SpeedUnknownReason.NO_FIX),
+  /** Write the session to CSV; chosen before start, fixed while recording. */
+  val csvEnabled: Boolean = true,
+  /** The running (or last) session is writing a CSV. */
+  val sessionHasCsv: Boolean = true,
+  /** App-private session CSVs, newest first. */
+  val sessionFiles: List<SessionFileInfo> = emptyList(),
+  /** True while a stopped session is still being flushed and closed. */
+  val closingCsv: Boolean = false,
   val savableFileName: String? = null,
   val saved: Boolean = false,
   val message: String? = null,
@@ -86,6 +94,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   val state: StateFlow<RecorderUiState> = _state.asStateFlow()
 
   private var writer: SessionWriter? = null
+  // Recording state is separate from [writer]: with CSV off a session runs without a writer.
+  private var active = false
+  private val sessionStore = SessionStore(File(app.filesDir, "sessions"))
   private var lastFile: File? = null
   private var startedElapsedNs = 0L
   private var tickerJob: Job? = null
@@ -163,6 +174,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   init {
     refreshPermissions()
     _state.update { it.copy(sensorAvailable = motion.availability()) }
+    refreshSessionFiles()
   }
 
   private fun granted(permission: String) =
@@ -180,7 +192,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   /** Turns the BLE share on or off; when recording, applies immediately. */
   fun setBleEnabled(enabled: Boolean) {
     _state.update { it.copy(bleEnabled = enabled) }
-    if (writer == null) return
+    if (!active) return
     if (enabled) ble.start() else ble.stop()
   }
 
@@ -189,22 +201,65 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun setProbeEnabled(enabled: Boolean) {
-    if (writer == null) _state.update { it.copy(probeEnabled = enabled) }
+    if (!active) _state.update { it.copy(probeEnabled = enabled) }
+  }
+
+  /** CSV recording on/off; only before a session starts. */
+  fun setCsvEnabled(enabled: Boolean) {
+    if (!active) _state.update { it.copy(csvEnabled = enabled) }
+  }
+
+  /** Re-reads the app-private session CSVs on the IO dispatcher. */
+  fun refreshSessionFiles() {
+    ioScope.launch {
+      val files = sessionStore.info()
+      _state.update { it.copy(sessionFiles = files) }
+    }
+  }
+
+  /**
+   * Deletes every app-private session CSV (never SAF copies or other files). Refused while a
+   * session runs or a stopped session is still being flushed and closed.
+   */
+  fun deleteAllSessionFiles() {
+    val current = _state.value
+    if (active || current.closingCsv) {
+      _state.update { it.copy(message = "計測中・書き込み中は削除できません。") }
+      return
+    }
+    ioScope.launch {
+      val result = sessionStore.deleteAll()
+      val remaining = sessionStore.info()
+      val lastGone = lastFile?.exists() == false
+      if (lastGone) lastFile = null
+      _state.update {
+        it.copy(
+          sessionFiles = remaining,
+          savableFileName = if (lastGone) null else it.savableFileName,
+          saved = if (lastGone) false else it.saved,
+          message =
+            if (result.failed == 0) "アプリ内の計測 CSV を ${result.deleted} 件削除しました。"
+            else "${result.deleted} 件削除しました。${result.failed} 件は削除できませんでした。",
+        )
+      }
+    }
   }
 
   fun start() {
-    if (writer != null) return
+    if (active) return
     refreshPermissions()
+    val recordCsv = _state.value.csvEnabled
     val file =
       try {
-        SessionFiles.create(File(app.filesDir, "sessions"), LocalDateTime.now())
+        sessionStore.newSessionFile(recordCsv, LocalDateTime.now())
       } catch (e: IOException) {
         _state.update { it.copy(message = "記録ファイルを作成できませんでした: ${e.message}") }
         return
       }
-    val sessionWriter = SessionWriter(file, ioScope)
-    writer = sessionWriter
+    // With CSV off nothing is written to disk: no file, no writer, and no stale file to save.
+    writer = file?.let { SessionWriter(it, ioScope) }
     lastFile = file
+    active = true
     latestSensors = emptyMap()
     latestFix = null
     latestCell = null
@@ -233,6 +288,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     _state.update {
       it.copy(
         recording = true,
+        sessionHasCsv = recordCsv,
         frozen = false,
         elapsedMs = 0,
         eventCount = 0,
@@ -267,7 +323,9 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
   /** [reason] is recorded in the CSV, e.g. "user" or "background". */
   fun stop(reason: String = "user") {
-    val sessionWriter = writer ?: return
+    if (!active) return
+    active = false
+    val sessionWriter = writer
     // Stop every source and wait for their threads first, so nothing lands after session_stop.
     motion.stop()
     gps.stop()
@@ -278,17 +336,29 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     tickerJob = null
     publish()
     writer = null
+    if (sessionWriter == null) {
+      _state.update {
+        it.copy(
+          recording = false,
+          frozen = true,
+          gpsStatus = "停止",
+          message = "計測を停止しました（CSV 記録オフのため、保存されたデータはありません）。",
+        )
+      }
+      return
+    }
     motion.rateSummary().forEach(sessionWriter::write)
     sessionWriter.write(
       LogEvent(Clock.nowUtcMs(), Clock.nowElapsedNs(), "session_stop", mapOf("note" to reason))
     )
-    _state.update { it.copy(recording = false, frozen = true, gpsStatus = "停止") }
+    _state.update { it.copy(recording = false, frozen = true, gpsStatus = "停止", closingCsv = true) }
     ioScope.launch {
       sessionWriter.close()
       val error = sessionWriter.error
       _state.update {
         it.copy(
           eventCount = sessionWriter.count,
+          closingCsv = false,
           savableFileName = sessionWriter.file.name,
           message =
             when {
@@ -298,6 +368,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
             },
         )
       }
+      refreshSessionFiles()
     }
   }
 

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.performClick
 import com.example.helloandroid.recording.CellReading
 import com.example.helloandroid.recording.CellSnapshot
@@ -13,10 +14,12 @@ import com.example.helloandroid.recording.CellStatus
 import com.example.helloandroid.recording.MotionSensor
 import com.example.helloandroid.recording.RecorderUiState
 import com.example.helloandroid.recording.SensorRate
+import com.example.helloandroid.recording.SessionFileInfo
 import com.example.helloandroid.recording.SpeedBand
 import com.example.helloandroid.recording.SpeedDisplay
 import com.example.helloandroid.recording.SpeedUnknownReason
 import com.example.helloandroid.recording.SensorReading
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -154,5 +157,69 @@ class MainScreenTest {
     composeTestRule.onNodeWithText("▼ 開く").performClick()
     composeTestRule.onNodeWithText("GPS測位軌跡（概略）").assertExists()
     composeTestRule.onNodeWithText("GPS受信待ち（測位なし）").assertExists()
+  }
+
+  @Test
+  fun csvOff_warnsAndHidesSaveButton() {
+    composeTestRule.setContent {
+      MainScreen(
+        state = RecorderUiState(recording = true, csvEnabled = false, sessionHasCsv = false),
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("CSV 記録オフ・データは保存されません").assertExists()
+    composeTestRule.onNodeWithText("CSV を保存").assertDoesNotExist()
+  }
+
+  @Test
+  fun deleteAll_asksForConfirmationWithCountAndSize_beforeDeleting() {
+    var deleted = 0
+    composeTestRule.setContent {
+      MainScreen(
+        state =
+          RecorderUiState(
+            sessionFiles =
+              listOf(
+                SessionFileInfo("keio-ride-20261030-100000-000.csv", 2048, 0),
+                SessionFileInfo("keio-ride-20261030-090000-000.csv", 1024, 0),
+              )
+          ),
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+        onDeleteAllSessionFiles = { deleted++ },
+      )
+    }
+    composeTestRule.onNodeWithText("アプリ内の計測 CSV をすべて削除").performClick()
+    composeTestRule.onNodeWithText("2 件（合計 3.0 KB）", substring = true).assertExists()
+    composeTestRule.onNodeWithText("取り消せません", substring = true).assertExists()
+    assertEquals(0, deleted)
+    composeTestRule.onNodeWithText("削除する").performClick()
+    assertEquals(1, deleted)
+  }
+
+  @Test
+  fun deleteAll_isDisabledWhileRecording() {
+    composeTestRule.setContent {
+      MainScreen(
+        state =
+          RecorderUiState(
+            recording = true,
+            sessionFiles = listOf(SessionFileInfo("keio-ride-20261030-100000-000.csv", 10, 0)),
+          ),
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("アプリ内の計測 CSV をすべて削除").assertIsNotEnabled()
   }
 }
