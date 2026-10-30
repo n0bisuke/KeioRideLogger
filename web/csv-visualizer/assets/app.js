@@ -595,10 +595,20 @@ const KRLApp = (() => {
 
   // ---------------------------------------------------------------------------------------------
   // CSV loading
+  /** Blob.text() where available, FileReader otherwise (older browsers). */
+  function readText(file) {
+    if (typeof file.text === "function") return file.text();
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsText(file, "utf-8");
+    });
+  }
   async function readFile(file) {
     if (!file) return;
     let text;
-    try { text = await file.text(); } catch { message([["bad", "ファイルを読み込めませんでした。"]]); return; }
+    try { text = await readText(file); } catch { message([["bad", "ファイルを読み込めませんでした。"]]); return; }
     const s = K.buildCsvSession(text);
     if (s.error) {
       const extra = [];
