@@ -1,4 +1,4 @@
-      if (!se.noMarks) for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);// Keio Ride Logger dashboard UI shared by the movement monitor (/) and the Mt.TAKAO 3 LT page.
+// Keio Ride Logger dashboard UI shared by the movement monitor (/) and the Mt.TAKAO 3 LT page.
 // Pages differ only by the config passed to KRLApp.start(). Data (CSV or BLE) stays in memory:
 // nothing is uploaded, stored, or logged. Only OpenStreetMap tiles are fetched, when the map is on.
 "use strict";
@@ -550,7 +550,7 @@ const KRLApp = (() => {
         }
         ctx.restore();
       }
-      for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);
+      if (!se.noMarks) for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);
     }
   }
   function envelope(pts, sc) {
