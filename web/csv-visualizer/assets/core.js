@@ -98,7 +98,8 @@ const KRL = (() => {
           const lat = num(g("lat")), lon = num(g("lon"));
           if (lat === null || lon === null) break;
           const mps = num(g("speed_mps"));
-          s.gps.push({ t: x.t, lat, lon, kmh: mps === null ? null : mps * 3.6, acc: num(g("h_accuracy_m")) });
+          // alt: GPS altitude [m] as recorded (blank, invalid or a missing column = null, never 0).
+          s.gps.push({ t: x.t, lat, lon, kmh: mps === null ? null : mps * 3.6, acc: num(g("h_accuracy_m")), alt: num(g("altitude_m")) });
           break;
         }
         case "cell": {
@@ -284,7 +285,8 @@ const KRL = (() => {
       };
       if (p.gps && Number.isFinite(p.gps.lat) && Number.isFinite(p.gps.lon)) {
         const t = p.t - (p.gps.ageMs ?? 0);
-        push(s.gps, { t, lat: p.gps.lat, lon: p.gps.lon, kmh: p.gps.kmh ?? null, acc: p.gps.accM ?? null },
+        // BLE protocol v1 carries no altitude.
+        push(s.gps, { t, lat: p.gps.lat, lon: p.gps.lon, kmh: p.gps.kmh ?? null, acc: p.gps.accM ?? null, alt: null },
           (a, b) => Math.abs(a.t - b.t) < 500);
       }
       if (p.cell) {
@@ -348,10 +350,11 @@ const KRL = (() => {
 
   // -------------------------------------------------------------------------
   // Speed character: same rules as SpeedState.kt (Android is the reference implementation).
-  // Bands [km/h, lower bound inclusive], in sprite-sheet order (4x2 sheet, 7 frames, last cell empty).
+  // Bands [km/h, lower bound inclusive], in sprite-sheet order (4x2 sheet, all 8 frames used).
+  // Display thresholds only: they do not detect the vehicle or which train is being ridden.
   const SPEED_BANDS = [
-    { label: "停止", min: 0 }, { label: "ゆっくり歩き", min: 1 }, { label: "普通歩き", min: 3 }, { label: "走る", min: 6 },
-    { label: "自転車くらい", min: 15 }, { label: "車くらい", min: 30 }, { label: "京王ライナー高速域", min: 90 },
+    { label: "停止", min: 0 }, { label: "ゆっくり歩き", min: 1 }, { label: "走る", min: 6 }, { label: "自転車くらい", min: 15 },
+    { label: "車くらい", min: 30 }, { label: "京王ライナー高速域", min: 70 }, { label: "高速域", min: 90 }, { label: "超高速域", min: 110 },
   ];
   const SPEED = { WINDOW_MS: 5000, STALE_MS: 5000, MAX_ACC_M: 30, MIN_MARGIN_KMH: 0.5, REL_MARGIN: 0.1, REPLAY_MS: 60000 };
   const bandOf = kmh => { let i = 0; for (let k = 0; k < SPEED_BANDS.length; k++) if (kmh >= SPEED_BANDS[k].min) i = k; return i; };

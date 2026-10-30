@@ -34,10 +34,12 @@ window.KRL_DEMO_DATA = (() => {
     for (let i = 0; i < gpsCount; i++) {
       const u = i / (gpsCount - 1), phase = u * Math.PI * 2;
       const speed = i % 3 === 0 ? 0 : i === 18 ? 1.181 : .04 + .48 * Math.sin(phase * 1.4) ** 2;
+      // Fictional GPS altitude that drifts along the walk; #debug also has a short blank stretch to show the gap.
+      const altitude = debug && i >= 30 && i <= 32 ? "" : (38 + 4 * u + 2.5 * Math.sin(phase * 1.5)).toFixed(1);
       add(u * 50, "gps", {
         lat: (origin.lat + .00015 * u + .00008 * Math.sin(phase)).toFixed(7),
         lon: (origin.lon + .00012 * Math.sin(phase * .8)).toFixed(7),
-        speed_mps: speed.toFixed(3), altitude_m: "38.0", h_accuracy_m: (2.6 + .7 * Math.abs(Math.sin(i))).toFixed(1), provider: "demo",
+        speed_mps: speed.toFixed(3), altitude_m: altitude, h_accuracy_m: (2.6 + .7 * Math.abs(Math.sin(i))).toFixed(1), provider: "demo",
       });
     }
 

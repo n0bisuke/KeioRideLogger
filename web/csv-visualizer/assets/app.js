@@ -7,6 +7,7 @@ const KRLApp = (() => {
   const K = KRL;
   const STALE_MS = 5000;
   const PLAY_TICK_MS = 200;      // replay redraw interval (wall clock)
+  const PLAY_SPEEDS = [1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
   const LOW_ACC_M = 30;
   const OSM_URL = "https://tile.openstreetmap.org";
 
@@ -21,7 +22,8 @@ const KRLApp = (() => {
     liveWindowMs: 10 * 60 * 1000,
     selectedT: null,
     csvT: null,                  // CSV cursor kept while another view is shown
-    play: { playing: false, speed: 5, timer: null, lastReal: 0 },
+    // anchorReal/anchorT: wall clock and cursor when playback (re)started; lastT: cursor after the last step.
+    play: { playing: false, speed: 1, timer: null, anchorReal: 0, anchorT: 0, lastT: null },
     dashboard: { overview: true },
     map: { view: null, userMoved: false, enabled: true },
     markers: [],                 // manual "実測メモ" markers { t, label }
@@ -130,7 +132,7 @@ const KRLApp = (() => {
     </section>
     <section class="side" aria-label="現在のネットワーク指標">
       <div class="panel character"><canvas id="charCanvas" class="sprite" aria-label="速度キャラクター"></canvas>
-        <div><b id="charLabel">—</b><div id="charSub" class="small muted"></div><div class="small muted">GPS 速度に合わせた演出です。乗り物を判定したものではありません。</div></div></div>
+        <div><b id="charLabel">—</b><div id="charSub" class="small muted"></div><div class="small muted">GPS 推定速度に応じた演出です。乗り物を自動判定するものではなく、GPS 速度は車両の速度計でもありません。</div></div></div>
       <div class="cards" id="cards"></div>
       <div class="panel history-panel"><h2>セル変更の履歴</h2><p class="help">「接続アンテナエリアの変化（推定）」は、記録された在圏セルの識別情報の変化から推定したものです。物理的な電波塔やアンテナの切り替えを確定するものではありません。</p><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
       ${cfg.travelModes ? `<div class="panel small"><label>移動手段メモ（表示用・自動判定しません） <select id="travelMode">${cfg.travelModes.map(m => `<option>${esc(m)}</option>`).join("")}</select></label></div>` : ""}
@@ -149,7 +151,7 @@ const KRLApp = (() => {
       <button id="playStart" type="button" aria-label="先頭へ">⏮ 先頭</button>
       <button id="playToggle" type="button" aria-label="再生" aria-pressed="false">▶ 再生</button>
       <button id="playEnd" type="button" aria-label="末尾へ">⏭ 末尾</button>
-      <label>速度 <select id="playSpeed"><option value="1">1 倍</option><option value="2">2 倍</option><option value="5" selected>5 倍</option><option value="10">10 倍</option><option value="20">20 倍</option><option value="30">30 倍</option></select></label>
+      <label>速度 <select id="playSpeed">${PLAY_SPEEDS.map(v => `<option value="${v}"${v === 1 ? " selected" : ""}>${v} 倍</option>`).join("")}</select></label>
       <input type="range" id="cursor" min="0" max="10000" value="0" aria-label="再生位置の時刻">
       <span id="cursorLabel"></span>
       <span class="small muted">スペース: 再生・一時停止　← →: 1 秒（Shift で 10 秒）</span>
@@ -160,12 +162,17 @@ const KRLApp = (() => {
     </div>
     <div class="charts">
       <div><h3>GPS 速度 [km/h]</h3><canvas id="chSpeed" class="chart"></canvas></div>
-      <div><h3>在圏セル RSRP [dBm]</h3><canvas id="chRsrp" class="chart"></canvas></div>
-      <div><h3>在圏セル RSRQ・SINR/RSSNR [dB]</h3><canvas id="chQual" class="chart"></canvas><p class="small muted">実線・● RSRQ　破線・○ SINR/RSSNR</p></div>
+      <div><h3>受信電波の強さ（RSRP）[dBm]</h3><canvas id="chRsrp" class="chart"></canvas></div>
+      <div><h3>受信電波の品質（RSRQ・SINR/RSSNR）[dB]</h3><canvas id="chQual" class="chart"></canvas><p class="small muted">実線・● RSRQ　破線・○ SINR/RSSNR</p></div>
       <div><h3>HTTP 応答時間 [ms]（DNS・TCP・TLS・HTTP を含む総所要時間）</h3><canvas id="chHttp" class="chart"></canvas><p class="small muted">● 成功　▲ HTTP エラー　× タイムアウト・失敗</p></div>
     </div>
     <h3>セル変更の時系列</h3><canvas id="chLane" class="chart lane"></canvas>
     <p class="small muted">◆ 接続アンテナエリアの変化（推定、縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。</p>
+  </section>
+  <section class="panel altitude-panel" id="altitudePanel" aria-label="GPS 高度">
+    <h2>GPS 高度 [m]</h2>
+    <canvas id="chAlt" class="chart"></canvas>
+    <p class="small muted">CSV の <code>altitude_m</code>（GPS の測位結果）をそのまま描きます。平滑化・補間はせず、空欄の区間は線でつなぎません。GPS の高さは水平位置より誤差が大きく、地形図や測量の標高ではありません。気圧からは換算しません。CSV に垂直方向の精度はないため、誤差の幅は示していません。○ は再生位置（選択時刻）の値です。</p>
   </section>
   <details class="panel sensors" id="sensorsPanel"><summary><h2>補助センサー（加速度・気圧）</h2></summary>
     <p class="small muted" id="sensorNote"></p>
@@ -175,7 +182,16 @@ const KRLApp = (() => {
     </div>
   </details>
   <section class="panel" id="selectionPanel"><h2>選択中の時刻</h2><div id="selection" class="muted">地図の点、グラフ、または履歴をクリックしてください。</div></section>
-</main>`;
+</main>
+<div class="floatchar hidden" id="floatChar" role="group" tabindex="0" aria-roledescription="移動できるキャラクター"
+  aria-label="速度キャラクター。ドラッグ、またはフォーカスして矢印キーで移動できます">
+  <div class="floatbar"><span class="grip" aria-hidden="true">⋮⋮</span>
+    <button id="floatHide" type="button" aria-label="キャラクターをたたむ" title="たたむ">×</button></div>
+  <canvas id="floatCanvas" class="floatsprite" aria-hidden="true"></canvas>
+  <div class="floatcap"><b id="floatLabel">—</b><span id="floatSub"></span>
+    <span class="floatnote">GPS 推定速度に応じた演出で、乗り物の判定ではありません</span></div>
+</div>
+<button id="floatShow" class="floatshow hidden" type="button" aria-label="キャラクターを表示">キャラクターを表示</button>`;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -214,6 +230,7 @@ const KRLApp = (() => {
     const ageText = ms => (ms === null ? "" : ms < 1000 ? "たった今" : `${Math.round(ms / 1000)} 秒前`);
     const card = (k, v, sub = "", cls = "") => `<div class="card ${cls}"><b>${k}</b><span>${v}</span>${sub ? `<div class="small muted">${sub}</div>` : ""}</div>`;
 
+    const notTakenAlt = ble => `<span class="nodata">${ble ? "未取得（BLE では送信しない）" : "未取得"}</span>`;
     const gps = lastAt(s.gps, t);
     const gpsAge = gps ? t - gps.t : null;
     const gpsFresh = gps && gpsAge <= STALE_MS;
@@ -236,6 +253,10 @@ const KRLApp = (() => {
       gpsFresh ? (kmh ?? '<span class="nodata">速度なし（0 km/h ではない）</span>') : `<span class="nodata">${gps ? "GPS 更新なし" : "GPS 未測位"}</span>`,
       gps ? `最終測位 ${K.jstClock(gps.t)}（${ageText(gpsAge)}）・精度 ${fmt(gps.acc, 1, " m") ?? "不明"}` : "", stale || (gps && !gpsFresh) ? "dim" : ""));
     if (cfg.showDistance) cards.push(card("距離（参考）", distanceText(s, t), `精度 ${LOW_ACC_M} m 以内・欠測を除く測位点から`, "distance"));
+    // GPS altitude of the same fix as the speed: blank stays "未取得", never 0 m, never from pressure.
+    cards.push(card("GPS 高度",
+      gpsFresh ? (fmt(gps.alt, 1, " m") ?? notTakenAlt(live)) : `<span class="nodata">${gps ? "GPS 更新なし" : "GPS 未測位"}</span>`,
+      "GPS 由来で誤差が大きい値です。気圧からは換算しません", `altitude${gps && !gpsFresh ? " dim" : ""}`));
     // Each radio metric keeps a one-line plain-Japanese explanation that is always visible.
     const explained = (k, v, help, sub = "", cls = "") =>
       `<div class="card ${cls}"><b>${k}</b><span>${v}</span><div class="help">${help}</div>${sub ? `<div class="small muted">${sub}</div>` : ""}</div>`;
@@ -299,16 +320,109 @@ const KRLApp = (() => {
     const state = s ? K.speedStateAt(s.gps, speedNow()) : null;
     const band = state && state.band !== null ? K.SPEED_BANDS[state.band] : null;
     $("charLabel").textContent = !s ? "データ待ち" : band ? band.label : K.SPEED_REASONS[state.reason];
-    $("charSub").textContent = !s ? "" : band ? `GPS 速度 ${state.kmh.toFixed(1)} km/h（直近 5 秒の中央値）${state.band === K.SPEED_BANDS.length - 1 ? "・演出上の速度帯で、列車の判定や速度計ではありません" : ""}` : "GPS 速度 不明（0 km/h ではありません）";
-    const c = $("charCanvas");
+    $("charSub").textContent = !s ? "" : band ? `GPS 速度 ${state.kmh.toFixed(1)} km/h（直近 5 秒の中央値）` : "GPS 速度 不明（0 km/h ではありません）";
+    // The floating character repeats the state, speed and caveat so it can stand alone.
+    $("floatLabel").textContent = $("charLabel").textContent;
+    $("floatSub").textContent = !s ? "" : band ? `${state.kmh.toFixed(1)} km/h` : "速度不明（0 km/h ではない）";
+    // While the floating one is shown, the card keeps only its text so the sprite is not shown twice.
+    const floating = !float.hidden;
+    $("charCanvas").classList.toggle("hidden", floating);
+    if (!floating) drawSprite($("charCanvas"), band ? state.band : null);
+    else drawSprite($("floatCanvas"), band ? state.band : null);
+  }
+  /** Draws frame [band] (null = dimmed stop frame) with nearest-neighbour scaling and kept aspect ratio. */
+  function drawSprite(c, band) {
     const { ctx, w, h } = setupCanvas(c);
-    if (!sprite) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui"; ctx.textAlign = "center"; ctx.fillText(band ? band.label : "—", w / 2, h / 2); ctx.textAlign = "left"; return; }
-    const f = K.spriteFrame(sprite.naturalWidth || sprite.width, sprite.naturalHeight || sprite.height, band ? state.band : 0);
+    if (!sprite) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui"; ctx.textAlign = "center"; ctx.fillText(band !== null ? K.SPEED_BANDS[band].label : "—", w / 2, h / 2); ctx.textAlign = "left"; return; }
+    const f = K.spriteFrame(sprite.naturalWidth || sprite.width, sprite.naturalHeight || sprite.height, band ?? 0);
     const scale = Math.min(w / f.w, h / f.h), dw = f.w * scale, dh = f.h * scale;
     ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = band ? 1 : 0.25;
+    ctx.globalAlpha = band !== null ? 1 : 0.25;
     ctx.drawImage(sprite, f.x, f.y, f.w, f.h, (w - dw) / 2, (h - dh) / 2, dw, dh);
     ctx.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Floating character: dragged anywhere by the user, kept inside the viewport. Only its position
+  // and shown/hidden state go to localStorage (shared by both pages); no GPS/CSV/BLE data.
+  const FLOAT_KEY = "krl.floatingCharacter.v1";
+  const float = { hidden: false, x: null, y: null, drag: null };
+  function loadFloat() {
+    try {
+      const v = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
+      if (v && typeof v === "object") {
+        float.hidden = v.hidden === true;
+        if (Number.isFinite(v.x) && Number.isFinite(v.y)) { float.x = v.x; float.y = v.y; }
+      }
+    } catch (_) { /* unavailable or corrupt storage: use the defaults */ }
+  }
+  function saveFloat() {
+    try { localStorage.setItem(FLOAT_KEY, JSON.stringify({ x: float.x, y: float.y, hidden: float.hidden })); } catch (_) { /* not saved */ }
+  }
+  /** Size of the floating box; CSS sizes as a fallback when layout is unavailable. */
+  function floatSize() {
+    const el = $("floatChar");
+    return { w: el.offsetWidth || 150, h: el.offsetHeight || 190 };
+  }
+  /** Places the box at (x, y), clamped so it stays fully inside the viewport; null = bottom right. */
+  function placeFloat(x, y) {
+    const el = $("floatChar"), { w, h } = floatSize(), m = 8;
+    const vw = window.innerWidth || document.documentElement.clientWidth, vh = window.innerHeight || document.documentElement.clientHeight;
+    if (x === null || y === null) { x = vw - w - 16; y = vh - h - 16; }
+    float.x = Math.round(Math.max(m, Math.min(x, vw - w - m)));
+    float.y = Math.round(Math.max(m, Math.min(y, vh - h - m)));
+    el.style.left = `${float.x}px`; el.style.top = `${float.y}px`;
+  }
+  function showFloat(show) {
+    float.hidden = !show;
+    $("floatChar").classList.toggle("hidden", !show);
+    $("floatShow").classList.toggle("hidden", show);
+    if (show) placeFloat(float.x, float.y);
+    saveFloat();
+    renderCharacter();
+  }
+  function wireFloat() {
+    const el = $("floatChar");
+    loadFloat();
+    el.classList.toggle("hidden", float.hidden);
+    $("floatShow").classList.toggle("hidden", !float.hidden);
+    if (!float.hidden) placeFloat(float.x, float.y);
+    $("floatHide").addEventListener("click", () => { showFloat(false); $("floatShow").focus(); });
+    $("floatShow").addEventListener("click", () => { showFloat(true); el.focus(); });
+    // Pointer Events cover mouse, touch and pen. Capturing the pointer and stopping propagation keeps
+    // the map, charts and page from seeing the drag.
+    el.addEventListener("pointerdown", e => {
+      if (e.button !== 0 || e.target.closest("button")) return;
+      e.preventDefault(); e.stopPropagation();
+      float.drag = { id: e.pointerId, dx: e.clientX - float.x, dy: e.clientY - float.y };
+      el.classList.add("dragging");
+      if (el.setPointerCapture) try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    });
+    el.addEventListener("pointermove", e => {
+      if (!float.drag || e.pointerId !== float.drag.id) return;
+      e.preventDefault(); e.stopPropagation();
+      placeFloat(e.clientX - float.drag.dx, e.clientY - float.drag.dy);
+    });
+    const end = e => {
+      if (!float.drag || e.pointerId !== float.drag.id) return;
+      e.stopPropagation();
+      float.drag = null;
+      el.classList.remove("dragging");
+      saveFloat();
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+    for (const t of ["click", "wheel", "dblclick"]) el.addEventListener(t, e => e.stopPropagation());
+    // Arrow keys move it while it has focus (Shift = larger steps); they do not reach the replay keys.
+    el.addEventListener("keydown", e => {
+      const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!d || e.target !== el) return;
+      e.preventDefault(); e.stopPropagation();
+      const step = e.shiftKey ? 50 : 10;
+      placeFloat(float.x + d[0] * step, float.y + d[1] * step);
+      saveFloat();
+    });
+    window.addEventListener("resize", () => { if (!float.hidden) placeFloat(float.x, float.y); });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -586,7 +700,7 @@ const KRLApp = (() => {
     const { ctx, w, h } = setupCanvas($(id));
     const s = session();
     if (!s) return emptyNote(ctx, w, h, "データ未読み込み");
-    let vis = series.map(se => ({ ...se, pts: se.pts.filter(p => p.v !== null && Number.isFinite(p.v) && inWin(p.t)) }));
+    let vis = series.map(se => ({ ...se, pts: validPts(se) }));
     const vals = vis.flatMap(se => se.pts.map(p => p.v));
     if (!vals.length) { emptyNote(ctx, w, h, emptyText); const sc = scales(w, h, 0, 1); verticals(ctx, w, h, sc); return; }
     let yMin = Math.min(...vals), yMax = Math.max(...vals);
@@ -602,14 +716,46 @@ const KRLApp = (() => {
         ctx.save(); ctx.strokeStyle = se.color; ctx.lineWidth = se.noMarks ? 1.5 : 2; if (se.dash || se.dashed) ctx.setLineDash(se.dash || [6, 4]);
         for (let i = 1; i < se.pts.length; i++) {
           const a = se.pts[i - 1], b = se.pts[i];
-          if (b.t - a.t > se.gapMs) continue;
+          if (b.t - a.t > se.gapMs || b.brk) continue;
           ctx.beginPath(); ctx.moveTo(sc.sx(a.t), sc.sy(a.v)); ctx.lineTo(sc.sx(b.t), sc.sy(b.v)); ctx.stroke();
         }
         ctx.restore();
       }
       if (!se.noMarks) for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);
+      if (se.cursorValue) cursorValue(ctx, w, sc, se, unit);
     }
     shadeFuture(ctx, w, h, sc);
+  }
+  /**
+   * Points inside the window with a finite value. With [breakOnMissing], a point that follows a
+   * missing value starts a new line, so a blank in the record is never bridged.
+   */
+  function validPts(se) {
+    const out = [];
+    let missing = false;
+    for (const p of se.pts) {
+      if (!inWin(p.t)) continue;
+      if (p.v === null || !Number.isFinite(p.v)) { missing = true; continue; }
+      out.push(missing && se.breakOnMissing ? { ...p, brk: true } : p);
+      missing = false;
+    }
+    return out;
+  }
+  /** Rings the last point at or before the focus time and labels its value (the cursor's value). */
+  function cursorValue(ctx, w, sc, se, unit) {
+    const t = focusT();
+    let p = null;
+    for (const q of se.pts) if (q.t <= t) p = q; else break;
+    if (!p) return;
+    const x = sc.sx(p.t), y = sc.sy(p.v);
+    ctx.save();
+    ctx.strokeStyle = css("--fg"); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = css("--fg"); ctx.font = "11px system-ui";
+    const label = `${p.v.toFixed(1)} ${unit}`;
+    ctx.textAlign = x > w - 70 ? "right" : "left";
+    ctx.fillText(label, x + (ctx.textAlign === "right" ? -8 : 8), Math.max(12, y - 6));
+    ctx.restore();
   }
   function envelope(pts, sc) {
     const out = [];
@@ -642,6 +788,8 @@ const KRLApp = (() => {
       { pts: probes.filter(p => p.status === "ok").map(p => ({ t: p.t, v: p.ms, mark: "dot" })), color: css("--http"), gapMs: null },
       { pts: probes.filter(p => p.status !== "ok").map(p => ({ t: p.t, v: p.ms ?? 0, mark: pm[p.status] || "cross" })), color: css("--bad"), gapMs: null },
     ], "ms", "HTTP 応答時間の記録がありません");
+    chart("chAlt", [{ pts: (s ? s.gps : []).map(p => ({ t: p.t, v: p.alt })), color: css("--gps"), gapMs: K.GPS_GAP_MS, breakOnMissing: true, cursorValue: true }], "m",
+      st.view === "ble" ? "BLE ライブでは GPS 高度を受信しません（CSV のみ）" : "GPS 高度の値がありません（空欄、または列のない古い CSV）");
     renderLane();
   }
   function renderLane() {
@@ -845,7 +993,7 @@ const KRLApp = (() => {
     const [a, b] = windowRange();
     if (st.selectedT === null || st.selectedT >= b) st.selectedT = a;
     st.play.playing = true;
-    st.play.lastReal = performance.now();
+    anchorPlay(performance.now());
     st.play.timer = setTimeout(playStep, PLAY_TICK_MS);
     render();
   }
@@ -855,11 +1003,23 @@ const KRLApp = (() => {
     st.play.timer = null;
     if (cfg && $("playToggle")) renderReplay();
   }
+  function anchorPlay(now) {
+    st.play.anchorReal = now;
+    st.play.anchorT = st.selectedT;
+    st.play.lastT = st.selectedT;
+  }
+  /**
+   * The cursor is anchor + elapsed wall time x speed, computed from the anchor every step rather than
+   * by adding per-tick deltas, so late timers at high speeds never accumulate drift. A seek by the user
+   * while playing (slider, keys, clicks) moves the anchor to the new position.
+   */
   function playStep() {
     if (!st.play.playing) return;
     const now = performance.now();
+    if (st.selectedT !== st.play.lastT) anchorPlay(now);
     try {
-      advance((now - st.play.lastReal) * st.play.speed);
+      advanceTo(st.play.anchorT + (now - st.play.anchorReal) * st.play.speed);
+      st.play.lastT = st.selectedT;
     } catch (error) {
       // A failed canvas redraw must not leave the UI claiming playback is active forever.
       st.play.playing = false;
@@ -868,15 +1028,17 @@ const KRLApp = (() => {
       renderReplay();
       return;
     }
-    st.play.lastReal = now;
     if (st.play.playing) st.play.timer = setTimeout(playStep, PLAY_TICK_MS);
   }
-  /** Moves the cursor by [ms] of recorded time; stops at the end of the range. */
-  function advance(ms) {
+  /** Moves the cursor to recorded time [t]; stops at the end of the range. */
+  function advanceTo(t) {
     const [a, b] = windowRange();
-    const t = (st.selectedT ?? a) + ms;
     if (t >= b) { st.selectedT = b; pause(); } else st.selectedT = Math.max(a, t);
     render();
+  }
+  /** Moves the cursor by [ms] of recorded time (tests and key steps). */
+  function advance(ms) {
+    advanceTo((st.selectedT ?? windowRange()[0]) + ms);
   }
   function renderReplay() {
     const csv = st.view === "csv" && !!st.csv;
@@ -1046,7 +1208,16 @@ const KRLApp = (() => {
     $("playToggle").addEventListener("click", () => (st.play.playing ? pause() : play()));
     $("playStart").addEventListener("click", () => { pause(); setCursor(windowRange()[0]); });
     $("playEnd").addEventListener("click", () => { pause(); setCursor(windowRange()[1]); });
-    $("playSpeed").addEventListener("input", e => { st.play.speed = Number(e.target.value) || 1; renderReplay(); });
+    $("playSpeed").addEventListener("input", e => {
+      // Settle the position at the old speed, then continue from here at the new one.
+      if (st.play.playing) {
+        const now = performance.now();
+        if (st.selectedT === st.play.lastT) advanceTo(st.play.anchorT + (now - st.play.anchorReal) * st.play.speed);
+        if (st.play.playing) anchorPlay(now);
+      }
+      st.play.speed = Number(e.target.value) || 1;
+      renderReplay();
+    });
     $("cursor").addEventListener("input", e => {
       const [a, b] = windowRange();
       setCursor(a + Number(e.target.value) / 10000 * (b - a));
@@ -1067,7 +1238,7 @@ const KRLApp = (() => {
     for (const id of ["showMap", "showAcc"]) $(id).addEventListener("input", () => drawMap());
     $("fit").addEventListener("click", () => { st.map.view = null; st.map.userMoved = false; drawMap(); });
     $("history").addEventListener("click", e => { const tr = e.target.closest("tr[data-t]"); if (tr) select(Number(tr.dataset.t)); });
-    for (const id of ["chSpeed", "chRsrp", "chQual", "chHttp", "chLane"]) {
+    for (const id of ["chSpeed", "chRsrp", "chQual", "chHttp", "chLane", "chAlt"]) {
       $(id).addEventListener("click", e => { if (!session()) return; const sc = scales($(id).clientWidth, $(id).clientHeight, 0, 1); select(sc.tx(e.offsetX)); });
     }
     if (cfg.route) {
@@ -1140,6 +1311,7 @@ const KRLApp = (() => {
     document.body.classList.toggle("has-route", !!cfg.route);
     loadSprite();
     wire();
+    wireFloat();
     updateDashboardHeight();
     if (window.ResizeObserver) new ResizeObserver(updateDashboardHeight).observe($("topHeader"));
     $("clock").textContent = `${K.jstClock(Date.now())} JST`;
