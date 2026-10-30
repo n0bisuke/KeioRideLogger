@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Offline viewer: no external scripts, styles, fonts or map tiles. The CSV never leaves the browser. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>Keio Ride Logger 軌跡ビューア</title>
+<style>
+  :root { --fg:#1d232a; --muted:#5b6672; --bg:#fbfbfa; --panel:#ffffff; --line:#d9dde2; --warn:#a1400b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin-bottom: 12px; }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; }
+  #banner { display: none; border-left: 4px solid var(--warn); background: #fff4ec; padding: 8px 12px; margin-bottom: 12px; }
+  .wrap { position: relative; border: 1px solid var(--line); background: var(--panel); }
+  canvas { display: block; width: 100%; height: 620px; cursor: crosshair; }
+  #tip { position: absolute; pointer-events: none; background: rgba(29,35,42,.92); color: #fff; padding: 6px 8px; font-size: 12px; border-radius: 4px; display: none; white-space: pre; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; margin-top: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); padding: 8px 10px; }
+  .stat b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; color: var(--muted); align-items: center; }
+  .sw { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; border-radius: 2px; }
+  .ramp { display: inline-block; width: 120px; height: 10px; background: linear-gradient(90deg, #2c7bb6, #abd9e9, #fdae61, #d7191c); vertical-align: middle; margin: 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Keio Ride Logger 軌跡ビューア</h1>
+  <p class="note">アプリが保存した CSV を選ぶと、GPS の軌跡を描きます。ファイルはこのブラウザの中だけで読み込み、どこにも送信しません。地図の背景（タイル）は使いません。座標は位置関係を示すだけで、道路や駅に合わせる補正（スナップ）はしていません。</p>
+
+  <div class="controls">
+    <input type="file" id="file" accept=".csv,text/csv">
+    <label><input type="checkbox" id="showAcc" checked> 精度の円</label>
+    <label><input type="checkbox" id="showSwitch" checked> 在圏セルの切り替わり</label>
+    <label><input type="checkbox" id="showNeighbor"> 周辺セル観測</label>
+    <label><input type="checkbox" id="showProbe" checked> 応答時間計測の失敗</label>
+    <label>低精度とみなす水平精度 <input type="number" id="accLimit" value="30" min="1" style="width:5em"> m</label>
+  </div>
+
+  <div id="banner"></div>
+  <div class="wrap">
+    <canvas id="map"></canvas>
+    <div id="tip"></div>
+  </div>
+
+  <div class="legend">
+    <span>速度 0<span class="ramp"></span><span id="vmax">—</span> km/h</span>
+    <span><span class="sw" style="background:#9aa3ad"></span>欠測区間（5 秒超の間隔、点線）</span>
+    <span><span class="sw" style="border:2px solid #9aa3ad;background:transparent"></span>低精度の点（白抜き）</span>
+    <span>◆ 在圏セルの切り替わり</span>
+    <span>· 周辺セル観測（切り替わりではない）</span>
+    <span>× 応答時間計測の失敗・タイムアウト</span>
+    <span>S 開始 / E 終了</span>
+  </div>
+
+  <div class="grid" id="stats"></div>
+</main>
+
+<script>
+"use strict";
+
+const GAP_MS = 5000;           // GPS interval treated as missing data
+const NEAR_MS = 5000;          // max time distance when placing non-GPS events on the track
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+const tip = document.getElementById("tip");
+let data = null;               // parsed session
+let view = null;               // projection for the current draw
+
+// --- CSV -----------------------------------------------------------------
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else quoted = false;
+      } else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  const header = rows.shift() || [];
+  return rows.filter(r => r.length > 1).map(r => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ""])));
+}
+
+const num = v => (v === undefined || v === "" ? null : Number(v));
+
+function load(text) {
+  const rows = parseCsv(text);
+  if (!rows.length || !("event" in rows[0])) throw new Error("Keio Ride Logger の CSV ではないようです（event 列がありません）");
+  const t = r => Date.parse(r.time_utc);
+  const gps = rows.filter(r => r.event === "gps" && r.lat !== "" && r.lon !== "")
+    .map(r => ({ t: t(r), lat: num(r.lat), lon: num(r.lon), speed: num(r.speed_mps), acc: num(r.h_accuracy_m) }))
+    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+    .sort((a, b) => a.t - b.t);
+  const switches = rows.filter(r => r.event === "cell_change" && r.status === "switched")
+    .map(r => ({ t: t(r), label: `${r.rat} PCI ${r.pci || "?"} ARFCN ${r.arfcn || "?"}` }));
+  const neighborTimes = [...new Set(rows.filter(r => r.event === "cell" && r.registered === "false").map(t))];
+  const probeFails = rows.filter(r => r.event === "http_probe" && r.status !== "ok")
+    .map(r => ({ t: t(r), label: `応答時間計測: ${r.status}${r.transport ? "（" + r.transport + "）" : ""}` }));
+  return { gps, switches, neighborTimes, probeFails };
+}
+
+// --- geometry ------------------------------------------------------------
+const R = 6371008.8;
+function toXY(p, lat0, lon0) {
+  const k = Math.PI / 180;
+  return { x: (p.lon - lon0) * k * R * Math.cos(lat0 * k), y: (p.lat - lat0) * k * R };
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function median(xs) {
+  const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
+  return s.length ? s[Math.floor(s.length / 2)] : null;
+}
+function nearestByTime(points, t) {
+  let lo = 0, hi = points.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (points[mid].t < t) lo = mid + 1; else hi = mid; }
+  const cands = [points[lo], points[lo - 1]].filter(Boolean);
+  const best = cands.sort((a, b) => Math.abs(a.t - t) - Math.abs(b.t - t))[0];
+  return best && Math.abs(best.t - t) <= NEAR_MS ? best : null;
+}
+function speedColor(f) {
+  const stops = [[44,123,182],[171,217,233],[253,174,97],[215,25,28]];
+  f = Math.max(0, Math.min(1, f)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(f)), u = f - i;
+  const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * u));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// --- drawing -------------------------------------------------------------
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!data || !data.gps.length) {
+    ctx.fillStyle = "#5b6672"; ctx.font = "14px system-ui";
+    ctx.fillText(data ? "GPS の測位点がありません" : "CSV ファイルを選んでください", 20, 30);
+    return;
+  }
+  const accLimit = Number(document.getElementById("accLimit").value) || 30;
+  const pts = data.gps;
+  const lat0 = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+  const lon0 = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
+  pts.forEach(p => Object.assign(p, toXY(p, lat0, lon0)));
+  const pad = 40;
+  let minX = Math.min(...pts.map(p => p.x)), maxX = Math.max(...pts.map(p => p.x));
+  let minY = Math.min(...pts.map(p => p.y)), maxY = Math.max(...pts.map(p => p.y));
+  const span = Math.max(maxX - minX, maxY - minY, 50);
+  const scale = Math.min((w - 2 * pad) / Math.max(maxX - minX, span * 0.2, 1), (h - 2 * pad) / Math.max(maxY - minY, span * 0.2, 1));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const sx = p => w / 2 + (p.x - cx) * scale, sy = p => h / 2 - (p.y - cy) * scale;
+  view = { sx, sy, scale };
+
+  const vmax = Math.max(1, ...pts.map(p => (p.speed ?? 0) * 3.6));
+  document.getElementById("vmax").textContent = vmax.toFixed(0);
+
+  if (document.getElementById("showAcc").checked) {
+    for (const p of pts) if (p.acc) {
+      ctx.beginPath(); ctx.arc(sx(p), sy(p), p.acc * scale, 0, 2 * Math.PI);
+      ctx.fillStyle = p.acc > accLimit ? "rgba(161,64,11,0.05)" : "rgba(44,123,182,0.06)"; ctx.fill();
+    }
+  }
+  // Segments: colored by speed, dashed grey across gaps.
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const gap = b.t - a.t > GAP_MS;
+    ctx.beginPath(); ctx.moveTo(sx(a), sy(a)); ctx.lineTo(sx(b), sy(b));
+    ctx.setLineDash(gap ? [5, 5] : []);
+    ctx.strokeStyle = gap ? "#9aa3ad" : speedColor(((b.speed ?? 0) * 3.6) / vmax);
+    ctx.lineWidth = gap ? 1.5 : 3; ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const p of pts) {
+    const low = !p.acc || p.acc > accLimit;
+    ctx.beginPath(); ctx.arc(sx(p), sy(p), low ? 3.5 : 2.5, 0, 2 * Math.PI);
+    if (low) { ctx.strokeStyle = "#9aa3ad"; ctx.lineWidth = 1.5; ctx.fillStyle = "#fff"; ctx.fill(); ctx.stroke(); }
+    else { ctx.fillStyle = speedColor(((p.speed ?? 0) * 3.6) / vmax); ctx.fill(); }
+  }
+  const mark = (p, text, color) => {
+    ctx.fillStyle = color; ctx.font = "bold 13px system-ui";
+    ctx.fillText(text, sx(p) + 6, sy(p) - 6);
+  };
+  if (document.getElementById("showNeighbor").checked) {
+    ctx.fillStyle = "rgba(91,102,114,0.6)";
+    for (const t of data.neighborTimes) { const p = nearestByTime(pts, t); if (p) { ctx.fillRect(sx(p) - 1, sy(p) + 5, 2, 2); } }
+  }
+  if (document.getElementById("showSwitch").checked) {
+    for (const s of data.switches) {
+      const p = nearestByTime(pts, s.t); if (!p) continue;
+      const x = sx(p), y = sy(p);
+      ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath();
+      ctx.fillStyle = "#6a3d9a"; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+  if (document.getElementById("showProbe").checked) {
+    ctx.strokeStyle = "#d7191c"; ctx.lineWidth = 2;
+    for (const f of data.probeFails) {
+      const p = nearestByTime(pts, f.t); if (!p) continue;
+      const x = sx(p), y = sy(p);
+      ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
+    }
+  }
+  mark(pts[0], "S", "#1a7f37"); mark(pts[pts.length - 1], "E", "#a1400b");
+
+  // Scale bar.
+  const nice = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+  const meters = nice.find(m => m * scale > 80) || nice[nice.length - 1];
+  ctx.strokeStyle = "#1d232a"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(16, h - 16); ctx.lineTo(16 + meters * scale, h - 16); ctx.stroke();
+  ctx.fillStyle = "#1d232a"; ctx.font = "12px system-ui";
+  ctx.fillText(meters >= 1000 ? `${meters / 1000} km` : `${meters} m`, 16, h - 22);
+
+  summarize(accLimit);
+}
+
+function summarize(accLimit) {
+  const pts = data.gps;
+  const durS = (pts[pts.length - 1].t - pts[0].t) / 1000;
+  const gaps = pts.slice(1).filter((p, i) => p.t - pts[i].t > GAP_MS).length;
+  const good = pts.filter(p => p.acc && p.acc <= accLimit);
+  let d = 0;
+  for (let i = 1; i < good.length; i++) if (good[i].t - good[i - 1].t <= GAP_MS) d += dist(good[i], good[i - 1]);
+  const accMed = median(pts.map(p => p.acc));
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const spread = Math.max(...pts.map(p => Math.hypot(p.x - cx, p.y - cy)));
+  const fmtT = ms => new Date(ms).toLocaleString("ja-JP");
+  const stats = [
+    ["測位点", `${pts.length} 点（低精度 ${pts.length - good.length} 点）`],
+    ["期間", `${fmtT(pts[0].t)} 〜 ${fmtT(pts[pts.length - 1].t)}（${Math.round(durS)} 秒）`],
+    ["欠測区間", `${gaps} か所（間隔 5 秒超）`],
+    ["水平精度の中央値", accMed != null ? `${accMed.toFixed(1)} m` : "不明"],
+    ["参考距離", `${(d / 1000).toFixed(2)} km（精度 ${accLimit} m 以内・欠測を除く点だけで計算）`],
+    ["在圏セルの切り替わり", `${data.switches.length} 回（CSV の cell_change: switched）`],
+    ["応答時間計測の失敗", `${data.probeFails.length} 回`],
+  ];
+  document.getElementById("stats").innerHTML = stats.map(([k, v]) => `<div class="stat"><b>${k}</b>${v}</div>`).join("");
+
+  const banner = document.getElementById("banner");
+  const threshold = Math.max(2 * (accMed ?? 0), 30);
+  if (spread < threshold) {
+    banner.style.display = "block";
+    banner.textContent = `測位点の広がり（最大 ${spread.toFixed(0)} m）が位置誤差の目安（${threshold.toFixed(0)} m）以内です。ほぼ静止していたデータと考えられ、線の形を移動経路とみなさないでください。`;
+  } else banner.style.display = "none";
+}
+
+// --- interaction ---------------------------------------------------------
+canvas.addEventListener("mousemove", e => {
+  if (!data || !view || !data.gps.length) return;
+  const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = null, bd = 12;
+  for (const p of data.gps) { const d = Math.hypot(view.sx(p) - mx, view.sy(p) - my); if (d < bd) { bd = d; best = p; } }
+  if (!best) { tip.style.display = "none"; return; }
+  const near = [...data.switches, ...data.probeFails].filter(ev => Math.abs(ev.t - best.t) <= NEAR_MS).map(ev => ev.label);
+  tip.textContent = [
+    new Date(best.t).toLocaleTimeString("ja-JP"),
+    `速度 ${best.speed != null ? (best.speed * 3.6).toFixed(1) + " km/h" : "不明"}`,
+    `水平精度 ${best.acc != null ? "±" + best.acc.toFixed(1) + " m" : "不明"}`,
+    ...near,
+  ].join("\n");
+  tip.style.left = `${mx + 14}px`; tip.style.top = `${my + 14}px`; tip.style.display = "block";
+});
+canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+
+document.getElementById("file").addEventListener("change", async e => {
+  const file = e.target.files[0]; if (!file) return;
+  try { data = load(await file.text()); }
+  catch (err) { data = null; alertBanner(err.message); }
+  draw();
+});
+function alertBanner(msg) { const b = document.getElementById("banner"); b.style.display = "block"; b.textContent = msg; }
+for (const id of ["showAcc", "showSwitch", "showNeighbor", "showProbe", "accLimit"]) document.getElementById(id).addEventListener("input", draw);
+window.addEventListener("resize", draw);
+draw();
+</script>
+</body>
+</html>

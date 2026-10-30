@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Local-only viewer. The CSP forbids every network access (fetch, images, fonts, frames), so the
+  CSV and its coordinates cannot leave the browser even by mistake. No external libraries.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Keio Ride Logger CSV ビューア</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171d24; --panel2: #1e262f; --line: #2c3742; --fg: #e6eaee;
+    --muted: #93a1ad; --accent: #4fb3ff; --serving: #5fd38d; --neighbor: #8e99a4; --change: #ffb347;
+    --bad: #ff6b6b; --warn: #f2c94c; --sel: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { padding: 14px 16px 6px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0 0 2px; font-weight: 700; }
+  h2 { font-size: 14px; margin: 0 0 8px; font-weight: 700; color: var(--fg); }
+  .sub { color: var(--muted); font-size: 12px; margin: 0; }
+  main { padding: 12px 16px 32px; max-width: 1400px; margin: 0 auto; display: grid; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+  .loader { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .drop { flex: 1 1 280px; border: 1px dashed var(--line); border-radius: 6px; padding: 10px 12px; color: var(--muted); }
+  .drop.over { border-color: var(--accent); color: var(--fg); }
+  input[type=file] { color: var(--fg); }
+  .msg { margin: 8px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--panel2); border-left: 4px solid var(--accent); }
+  .msg.warn { border-left-color: var(--warn); }
+  .msg.bad { border-left-color: var(--bad); }
+  .msg:empty { display: none; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+  .card { background: var(--panel2); border-radius: 6px; padding: 8px 10px; }
+  .card b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+  .card span { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .card .nodata { color: var(--muted); font-size: 14px; }
+  .main-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+  .canvas-wrap { position: relative; }
+  canvas { display: block; width: 100%; background: #0b1015; border-radius: 6px; touch-action: none; }
+  #track { height: 460px; cursor: grab; }
+  #track.dragging { cursor: grabbing; }
+  .chart { height: 190px; cursor: crosshair; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+  .toolbar label { display: inline-flex; gap: 5px; align-items: center; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .range { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); }
+  .range input { width: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; vertical-align: middle; margin-right: 4px; }
+  .k-line { width: 18px; height: 3px; background: var(--accent); }
+  .k-gap { width: 18px; height: 0; border-top: 2px dotted var(--muted); }
+  .k-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .k-hollow { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--warn); }
+  .k-diamond { width: 9px; height: 9px; background: var(--change); transform: rotate(45deg); }
+  .k-serving { width: 8px; height: 8px; background: var(--serving); }
+  .k-neighbor { width: 9px; height: 9px; border: 1.5px solid var(--neighbor); border-radius: 50%; }
+  .k-sel { width: 2px; height: 12px; background: var(--sel); }
+  .detail dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-variant-numeric: tabular-nums; }
+  .detail dt { color: var(--muted); }
+  .detail dd { margin: 0; }
+  .muted { color: var(--muted); }
+  .events { max-height: 260px; overflow: auto; margin-top: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover, tr.selected { background: var(--panel2); }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; border: 1px solid currentColor; }
+  .tag.switched { color: var(--change); }
+  .tag.baseline { color: var(--serving); }
+  .tag.indeterminate { color: var(--muted); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Keio Ride Logger CSV ビューア</h1>
+  <p class="sub">計測 CSV をこのブラウザの中だけで読み込みます。アップロード・送信・保存はしません（外部への通信はブラウザの設定で禁止しています）。</p>
+</header>
+
+<main>
+  <section class="panel" aria-labelledby="h-load">
+    <h2 id="h-load">CSV の読み込み</h2>
+    <div class="loader">
+      <input type="file" id="file" accept=".csv,text/csv">
+      <div class="drop" id="drop">ここに CSV をドロップしても読み込めます</div>
+    </div>
+    <div id="messages"></div>
+  </section>
+
+  <section class="panel hidden" id="overview" aria-labelledby="h-ov">
+    <h2 id="h-ov">セッション概要</h2>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="panel hidden" id="filter" aria-labelledby="h-range">
+    <h2 id="h-range">表示する時間帯</h2>
+    <div class="range">
+      <span>開始</span><input type="range" id="rangeStart" min="0" max="1000" value="0"><span id="rangeStartLabel">—</span>
+      <span>終了</span><input type="range" id="rangeEnd" min="0" max="1000" value="1000"><span id="rangeEndLabel">—</span>
+    </div>
+    <div class="toolbar" style="margin-top:8px">
+      <button id="rangeReset" type="button">全期間に戻す</button>
+      <span>軌跡・グラフ・セルイベントの表示がこの時間帯に絞られます。</span>
+    </div>
+  </section>
+
+  <div class="main-grid hidden" id="mainGrid">
+    <section class="panel" aria-labelledby="h-track">
+      <h2 id="h-track">GPS軌跡・概略</h2>
+      <div class="toolbar">
+        <label><input type="checkbox" id="showAcc" checked> 精度の円</label>
+        <label><input type="checkbox" id="showChanges" checked> セル変更候補</label>
+        <label>低精度とみなす水平精度 <input type="number" id="accLimit" value="30" min="1" step="1" style="width:4.5em"> m</label>
+        <button id="fit" type="button">全体を表示</button>
+      </div>
+      <div class="canvas-wrap"><canvas id="track" aria-label="GPS軌跡の概略図"></canvas></div>
+      <div class="legend">
+        <span><i class="k-line"></i>連続した測位（色は速度）</span>
+        <span><i class="k-gap"></i>欠測（5 秒超）は線でつなぎません</span>
+        <span><i class="k-dot"></i>精度の良い点</span>
+        <span><i class="k-hollow"></i>低精度の点（白抜き）</span>
+        <span><i class="k-diamond"></i>セル変更候補</span>
+        <span><i class="k-sel"></i>選択中</span>
+      </div>
+      <p class="sub" style="margin-top:6px">GPS の座標そのものを平面に描いた概略図です。背景の地図はなく、駅や線路への補正もしていません。ホイールまたはピンチで拡大、ドラッグで移動、点をクリックで選択できます。</p>
+    </section>
+
+    <section class="panel detail" aria-labelledby="h-sel">
+      <h2 id="h-sel">選択中の時刻</h2>
+      <div id="selection" class="muted">軌跡の点、グラフ、またはセルイベントをクリックしてください。</div>
+      <h2 style="margin-top:14px">セルイベント</h2>
+      <div id="cellDiag" class="muted"></div>
+      <div class="events"><table id="changeTable"></table></div>
+    </section>
+  </div>
+
+  <section class="panel hidden" id="charts" aria-labelledby="h-charts">
+    <h2 id="h-charts">時系列（横軸: 計測開始からの経過時間）</h2>
+    <div class="toolbar">
+      <label><input type="checkbox" id="showNeighbors"> 周辺セルの RSRP も表示</label>
+    </div>
+    <h2 style="font-weight:600">GPS 速度 [km/h]</h2>
+    <canvas id="speedChart" class="chart" aria-label="GPS速度のグラフ"></canvas>
+    <h2 style="font-weight:600;margin-top:12px">在圏セルの RSRP [dBm]</h2>
+    <canvas id="rsrpChart" class="chart" aria-label="在圏セルRSRPのグラフ"></canvas>
+    <h2 style="font-weight:600;margin-top:12px">セル変更の時系列</h2>
+    <canvas id="laneChart" class="chart" style="height:90px" aria-label="セル変更の時系列"></canvas>
+    <div class="legend">
+      <span><i class="k-line"></i>値のある行どうしだけを線で結びます（間隔が開いた区間は補間しません）</span>
+      <span><i class="k-serving"></i>在圏セル（registered=true）</span>
+      <span><i class="k-neighbor"></i>周辺セル（白抜き・在圏セルとして数えません）</span>
+      <span><i class="k-diamond"></i>セル変更候補（縦の破線）</span>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// Constants. GPS_GAP_MS and RSRP_GAP_MS decide where lines are broken instead of interpolated.
+const GPS_GAP_MS = 5000;
+const RSRP_GAP_MS = 10000;
+const NEAR_MS = 5000;              // max time distance when tying an event to a GPS point
+const REQUIRED_COLUMNS = ["time_utc", "event"];
+const $ = id => document.getElementById(id);
+
+let S = null;                      // parsed session
+let selectedT = null;              // selected absolute time (ms)
+let range = [0, 1];                // visible window, fractions of the session
+let trackView = null;              // {scale, cx, cy} map transform
+let trackFit = null;
+
+// ---------------------------------------------------------------------------
+// CSV parsing: RFC 4180 style quotes (commas, LF/CRLF and "" inside quoted fields).
+function parseCsv(text) {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const records = [];
+  let row = [], field = "", quoted = false, i = 0, unterminated = false;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        quoted = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"' && field === "") { quoted = true; i++; continue; }
+    if (c === ",") { row.push(field); field = ""; i++; continue; }
+    if (c === "\n" || c === "\r") {
+      row.push(field); records.push(row); row = []; field = "";
+      i += (c === "\r" && text[i + 1] === "\n") ? 2 : 1;
+      continue;
+    }
+    field += c; i++;
+  }
+  if (quoted) unterminated = true;
+  if (field !== "" || row.length) { row.push(field); records.push(row); }
+  return { records, unterminated };
+}
+
+const numOrNull = v => {
+  if (v === undefined || v === null || String(v).trim() === "") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+};
+
+// ---------------------------------------------------------------------------
+// Build the session model from CSV text. Never throws on bad rows; counts them instead.
+function buildSession(text) {
+  if (!text || !text.trim()) return { error: "ファイルが空です。" };
+  const { records, unterminated } = parseCsv(text);
+  const header = records.shift() || [];
+  const missing = REQUIRED_COLUMNS.filter(c => !header.includes(c));
+  if (missing.length) {
+    return { error: `Keio Ride Logger の CSV ではないようです（必要な列 ${missing.join(", ")} がありません）。` };
+  }
+  const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+  const get = (r, col) => (idx[col] === undefined ? "" : (r[idx[col]] ?? ""));
+
+  let brokenRows = 0, badTimeRows = 0, blankRows = 0;
+  const rows = [];
+  for (const r of records) {
+    if (r.length === 1 && r[0] === "") { blankRows++; continue; }
+    if (r.length !== header.length) { brokenRows++; continue; }
+    const t = Date.parse(get(r, "time_utc"));
+    if (!Number.isFinite(t)) { badTimeRows++; continue; }
+    rows.push({ t, ev: get(r, "event"), r });
+  }
+  if (unterminated) brokenRows++;
+  rows.sort((a, b) => a.t - b.t);
+  if (!rows.length) {
+    return { error: "読み取れるデータ行がありません。", brokenRows, badTimeRows };
+  }
+
+  const startRow = rows.find(x => x.ev === "session_start");
+  const stopRow = [...rows].reverse().find(x => x.ev === "session_stop");
+  const t0 = startRow ? startRow.t : rows[0].t;
+  const t1 = Math.max(stopRow ? stopRow.t : rows[rows.length - 1].t, t0 + 1);
+
+  const gps = [], serving = [], neighbors = [], changes = [];
+  const counts = {}, cellPoll = { total: 0, registeredPositive: 0 }, probes = { total: 0, ok: 0 };
+  let cellStatusNotes = [];
+  let legacyChanges = 0;
+
+  for (const x of rows) {
+    counts[x.ev] = (counts[x.ev] || 0) + 1;
+    const g = col => get(x.r, col);
+    switch (x.ev) {
+      case "gps": {
+        const lat = numOrNull(g("lat")), lon = numOrNull(g("lon"));
+        if (lat === null || lon === null) break;
+        const mps = numOrNull(g("speed_mps"));
+        gps.push({ t: x.t, lat, lon, kmh: mps === null ? null : mps * 3.6, acc: numOrNull(g("h_accuracy_m")) });
+        break;
+      }
+      case "cell": {
+        const reg = g("registered");
+        if (reg !== "true" && reg !== "false") break;
+        const s = {
+          t: x.t, rat: g("rat") || "?", cellId: g("cell_id") || null, pci: g("pci") || null,
+          arfcn: g("arfcn") || null, rsrp: numOrNull(g("rsrp_dbm")), src: srcOf(g("note")),
+        };
+        (reg === "true" ? serving : neighbors).push(s);
+        break;
+      }
+      case "cell_change": {
+        const status = g("status");
+        const note = g("note");
+        const label = cellLabel(g("rat"), g("pci"), g("arfcn"));
+        if (status) {
+          changes.push({ t: x.t, status, label, prev: prevLabel(note) });
+        } else {
+          // Older CSVs had no status: the first row (prev=none) is the baseline, the rest switches.
+          legacyChanges++;
+          changes.push({ t: x.t, status: /prev=none/.test(note) ? "baseline" : "switched", label, prev: prevLabel(note), legacy: true });
+        }
+        break;
+      }
+      case "cell_poll": {
+        cellPoll.total++;
+        const m = /registered=(\d+)/.exec(g("note"));
+        if (m && Number(m[1]) > 0) cellPoll.registeredPositive++;
+        break;
+      }
+      case "cell_status":
+        cellStatusNotes.push(g("status"));
+        break;
+      case "http_probe":
+        probes.total++;
+        if (g("status") === "ok") probes.ok++;
+        break;
+    }
+  }
+  // Collapse duplicate serving samples reported by several API paths at the same time.
+  const dedupServing = [];
+  const seen = new Set();
+  for (const s of serving) {
+    const k = `${s.t}|${s.rat}|${s.cellId}|${s.pci}|${s.arfcn}|${s.rsrp}`;
+    if (!seen.has(k)) { seen.add(k); dedupServing.push(s); }
+  }
+
+  return {
+    t0, t1, rows: rows.length, brokenRows, badTimeRows, blankRows, header,
+    hasSessionBounds: !!startRow && !!stopRow,
+    gps, serving: dedupServing, neighbors, changes, counts, cellPoll, probes,
+    cellStatusNotes, legacyChanges,
+    hasCellColumns: header.includes("registered"),
+  };
+}
+
+function srcOf(note) { const m = /src=([a-z_]+)/.exec(note || ""); return m ? m[1] : null; }
+function cellLabel(rat, pci, arfcn) { return `${rat || "?"} PCI ${pci || "?"} ARFCN ${arfcn || "?"}`; }
+function prevLabel(note) {
+  const m = /prev=([^;]+)/.exec(note || "");
+  if (!m || m[1] === "none") return null;
+  const p = m[1].split("/");               // rat/cellId/pci/arfcn (new) or rat/cellId/pci/arfcn key (old)
+  return p.length >= 4 ? cellLabel(p[0], p[2], p[3]) : m[1];
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers.
+const pad2 = n => String(n).padStart(2, "0");
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 3600)}:${pad2(Math.floor(s / 60) % 60)}:${pad2(s % 60)}`;
+}
+function fmtClock(t) {
+  const d = new Date(t);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+const fmtNum = (v, digits, unit) => (v === null || v === undefined ? "データなし" : `${v.toFixed(digits)}${unit}`);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const visible = t => t >= winStart() && t <= winEnd();
+const winStart = () => S.t0 + range[0] * (S.t1 - S.t0);
+const winEnd = () => S.t0 + range[1] * (S.t1 - S.t0);
+
+// ---------------------------------------------------------------------------
+// Messages and overview.
+function showMessages(list) {
+  $("messages").innerHTML = list.map(([kind, text]) => `<p class="msg ${kind}">${esc(text)}</p>`).join("");
+}
+
+function renderOverview() {
+  const nodata = '<span class="nodata">データなし</span>';
+  const switched = S.changes.filter(c => c.status === "switched").length;
+  const cards = [
+    ["計測時間", `<span>${fmtElapsed(S.t1 - S.t0)}</span>${S.hasSessionBounds ? "" : '<div class="muted">開始/停止行がないため、最初と最後の行から算出</div>'}`],
+    ["イベント総数", `<span>${S.rows.toLocaleString()}</span>`],
+    ["GPS 件数", S.gps.length ? `<span>${S.gps.length.toLocaleString()}</span>` : nodata],
+    ["在圏セル観測数", !S.hasCellColumns || !S.counts.cell ? nodata : `<span>${S.serving.length.toLocaleString()}</span><div class="muted">周辺セル ${S.neighbors.length.toLocaleString()} 件は含まない</div>`],
+    ["セル変更候補", S.changes.length ? `<span>${switched}</span><div class="muted">最初の在圏セルは数えない</div>` : (S.serving.length ? '<span>0</span><div class="muted">cell_change 行なし</div>' : nodata)],
+    ["応答時間の計測", S.probes.total ? `<span>${S.probes.ok} / ${S.probes.total}</span><div class="muted">成功 / 実施</div>` : nodata],
+  ];
+  $("cards").innerHTML = cards.map(([k, v]) => `<div class="card"><b>${k}</b>${v}</div>`).join("");
+}
+
+// ---------------------------------------------------------------------------
+// Canvas helpers.
+function setupCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function speedColor(kmh, vmax) {
+  if (kmh === null) return css("--muted");
+  const f = Math.max(0, Math.min(1, kmh / Math.max(vmax, 1)));
+  const stops = [[79, 179, 255], [95, 211, 141], [242, 201, 76], [255, 107, 107]];
+  const x = f * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), u = x - i;
+  const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * u));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function emptyNote(ctx, w, h, text) {
+  ctx.fillStyle = css("--muted"); ctx.font = "13px system-ui"; ctx.textAlign = "center";
+  ctx.fillText(text, w / 2, h / 2); ctx.textAlign = "left";
+}
+
+// ---------------------------------------------------------------------------
+// GPS track ("map-like" plot of raw coordinates, local equirectangular projection).
+const EARTH_R = 6371008.8;
+function projectGps() {
+  if (!S.gps.length) return;
+  const lat0 = S.gps.reduce((a, p) => a + p.lat, 0) / S.gps.length;
+  const lon0 = S.gps.reduce((a, p) => a + p.lon, 0) / S.gps.length;
+  const k = Math.PI / 180, cosLat = Math.cos(lat0 * k);
+  for (const p of S.gps) { p.x = (p.lon - lon0) * k * EARTH_R * cosLat; p.y = (p.lat - lat0) * k * EARTH_R; }
+}
+function fitTrack(points) {
+  const canvas = $("track");
+  const w = canvas.clientWidth, h = canvas.clientHeight, pad = 30;
+  if (!points.length) { trackView = { scale: 1, cx: 0, cy: 0 }; return; }
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const spanX = Math.max(maxX - minX, 40), spanY = Math.max(maxY - minY, 40);
+  trackView = { scale: Math.min((w - 2 * pad) / spanX, (h - 2 * pad) / spanY), cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  trackFit = { ...trackView };
+}
+function toScreen(p, w, h) { return [w / 2 + (p.x - trackView.cx) * trackView.scale, h / 2 - (p.y - trackView.cy) * trackView.scale]; }
+
+function nearestGps(t) {
+  const a = S.gps;
+  if (!a.length) return null;
+  let lo = 0, hi = a.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m].t < t) lo = m + 1; else hi = m; }
+  let best = a[lo];
+  if (lo > 0 && Math.abs(a[lo - 1].t - t) < Math.abs(best.t - t)) best = a[lo - 1];
+  return Math.abs(best.t - t) <= NEAR_MS ? best : null;
+}
+
+function drawTrack() {
+  const canvas = $("track");
+  const { ctx, w, h } = setupCanvas(canvas);
+  if (!S.gps.length) { emptyNote(ctx, w, h, "GPS の測位データがありません（gps 行なし）"); return; }
+  const pts = S.gps.filter(p => visible(p.t));
+  if (!pts.length) { emptyNote(ctx, w, h, "この時間帯には GPS の測位点がありません"); return; }
+  const accLimit = Number($("accLimit").value) || 30;
+  const vmax = Math.max(1, ...S.gps.map(p => p.kmh ?? 0));
+
+  if ($("showAcc").checked) {
+    for (const p of pts) {
+      if (p.acc === null) continue;
+      const [x, y] = toScreen(p, w, h), r = p.acc * trackView.scale;
+      if (r < 1.5 || r > 4000) continue;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = p.acc > accLimit ? "rgba(242,201,76,0.05)" : "rgba(79,179,255,0.06)";
+      ctx.fill();
+    }
+  }
+  // Lines only between consecutive fixes within GPS_GAP_MS; gaps stay open.
+  ctx.lineWidth = 3; ctx.lineCap = "round";
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    if (b.t - a.t > GPS_GAP_MS) continue;
+    const [x1, y1] = toScreen(a, w, h), [x2, y2] = toScreen(b, w, h);
+    ctx.strokeStyle = speedColor(b.kmh, vmax);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  for (const p of pts) {
+    const [x, y] = toScreen(p, w, h);
+    const low = p.acc === null || p.acc > accLimit;
+    ctx.beginPath(); ctx.arc(x, y, low ? 4 : 2.5, 0, Math.PI * 2);
+    if (low) { ctx.fillStyle = css("--bg"); ctx.fill(); ctx.lineWidth = 1.8; ctx.strokeStyle = css("--warn"); ctx.stroke(); }
+    else { ctx.fillStyle = speedColor(p.kmh, vmax); ctx.fill(); }
+  }
+  if ($("showChanges").checked) {
+    for (const c of S.changes) {
+      if (c.status !== "switched" || !visible(c.t)) continue;
+      const p = nearestGps(c.t); if (!p) continue;
+      const [x, y] = toScreen(p, w, h);
+      ctx.beginPath(); ctx.moveTo(x, y - 8); ctx.lineTo(x + 8, y); ctx.lineTo(x, y + 8); ctx.lineTo(x - 8, y); ctx.closePath();
+      ctx.fillStyle = css("--change"); ctx.fill(); ctx.strokeStyle = css("--bg"); ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+  const label = (p, text) => {
+    const [x, y] = toScreen(p, w, h);
+    ctx.font = "bold 12px system-ui"; ctx.fillStyle = css("--fg"); ctx.fillText(text, x + 7, y - 7);
+  };
+  label(pts[0], "開始"); label(pts[pts.length - 1], "終了");
+  if (selectedT !== null) {
+    const p = nearestGps(selectedT);
+    if (p && visible(p.t)) {
+      const [x, y] = toScreen(p, w, h);
+      ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.strokeStyle = css("--sel"); ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+  // Scale bar.
+  const nice = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
+  const m = nice.find(v => v * trackView.scale >= 70) || nice[nice.length - 1];
+  ctx.strokeStyle = css("--fg"); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(14, h - 14); ctx.lineTo(14 + m * trackView.scale, h - 14); ctx.stroke();
+  ctx.fillStyle = css("--fg"); ctx.font = "12px system-ui";
+  ctx.fillText(m >= 1000 ? `${m / 1000} km` : `${m} m`, 14, h - 20);
+}
+
+// ---------------------------------------------------------------------------
+// Time-series charts. x = elapsed time since session start within the visible window.
+const CHART_PAD = { l: 46, r: 12, t: 10, b: 22 };
+function chartScales(w, h, yMin, yMax) {
+  const x0 = winStart(), x1 = winEnd();
+  const sx = t => CHART_PAD.l + (t - x0) / (x1 - x0) * (w - CHART_PAD.l - CHART_PAD.r);
+  const sy = v => CHART_PAD.t + (1 - (v - yMin) / (yMax - yMin)) * (h - CHART_PAD.t - CHART_PAD.b);
+  const tx = px => x0 + (px - CHART_PAD.l) / (w - CHART_PAD.l - CHART_PAD.r) * (x1 - x0);
+  return { sx, sy, tx };
+}
+function niceTicks(min, max, count) {
+  const span = max - min, step0 = span / count, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 5, 10].map(f => f * mag).find(s => span / s <= count) || mag * 10;
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+function drawAxes(ctx, w, h, sc, yMin, yMax, yUnit) {
+  ctx.strokeStyle = css("--line"); ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui"; ctx.lineWidth = 1;
+  for (const v of niceTicks(yMin, yMax, 4)) {
+    const y = sc.sy(v);
+    ctx.beginPath(); ctx.moveTo(CHART_PAD.l, y); ctx.lineTo(w - CHART_PAD.r, y); ctx.stroke();
+    ctx.fillText(`${v}`, 4, y + 4);
+  }
+  ctx.fillText(yUnit, 4, 10);
+  const spanS = (winEnd() - winStart()) / 1000;
+  const stepS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].find(s => spanS / s <= 8) || 3600;
+  const firstS = Math.ceil((winStart() - S.t0) / 1000 / stepS) * stepS;
+  for (let s = firstS; S.t0 + s * 1000 <= winEnd(); s += stepS) {
+    const x = sc.sx(S.t0 + s * 1000);
+    ctx.beginPath(); ctx.moveTo(x, CHART_PAD.t); ctx.lineTo(x, h - CHART_PAD.b); ctx.stroke();
+    ctx.fillText(fmtElapsed(s * 1000), x - 18, h - 6);
+  }
+}
+function drawChangeLines(ctx, h, sc) {
+  ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = css("--change"); ctx.lineWidth = 1.2;
+  for (const c of S.changes) {
+    if (c.status !== "switched" || !visible(c.t)) continue;
+    const x = sc.sx(c.t);
+    ctx.beginPath(); ctx.moveTo(x, CHART_PAD.t); ctx.lineTo(x, h - CHART_PAD.b); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawCursor(ctx, h, sc) {
+  if (selectedT === null || !visible(selectedT)) return;
+  const x = sc.sx(selectedT);
+  ctx.strokeStyle = css("--sel"); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x, CHART_PAD.t); ctx.lineTo(x, h - CHART_PAD.b); ctx.stroke();
+}
+/** Plots samples, joining only neighbours closer than gapMs. hollow=true draws open circles. */
+function plotSeries(ctx, sc, samples, gapMs, color, hollow) {
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+  if (!hollow) {
+    for (let i = 1; i < samples.length; i++) {
+      const a = samples[i - 1], b = samples[i];
+      if (b.t - a.t > gapMs) continue;
+      ctx.beginPath(); ctx.moveTo(sc.sx(a.t), sc.sy(a.v)); ctx.lineTo(sc.sx(b.t), sc.sy(b.v)); ctx.stroke();
+    }
+  }
+  for (const s of samples) {
+    ctx.beginPath(); ctx.arc(sc.sx(s.t), sc.sy(s.v), hollow ? 3 : 2, 0, Math.PI * 2);
+    if (hollow) { ctx.lineWidth = 1.2; ctx.stroke(); } else { ctx.fillStyle = color; ctx.fill(); }
+  }
+}
+
+function drawSpeedChart() {
+  const { ctx, w, h } = setupCanvas($("speedChart"));
+  const samples = S.gps.filter(p => p.kmh !== null && visible(p.t)).map(p => ({ t: p.t, v: p.kmh }));
+  if (!S.gps.length) return emptyNote(ctx, w, h, "GPS の測位データがありません");
+  if (!samples.length) return emptyNote(ctx, w, h, "この時間帯に速度の値がありません（speed_mps が空）");
+  const yMax = Math.max(10, ...samples.map(s => s.v)) * 1.1;
+  const sc = chartScales(w, h, 0, yMax);
+  drawAxes(ctx, w, h, sc, 0, yMax, "km/h");
+  drawChangeLines(ctx, h, sc);
+  plotSeries(ctx, sc, samples, GPS_GAP_MS, css("--accent"), false);
+  drawCursor(ctx, h, sc);
+}
+
+function drawRsrpChart() {
+  const { ctx, w, h } = setupCanvas($("rsrpChart"));
+  const serving = S.serving.filter(s => s.rsrp !== null && visible(s.t)).map(s => ({ t: s.t, v: s.rsrp }));
+  const showNb = $("showNeighbors").checked;
+  const nb = showNb ? S.neighbors.filter(s => s.rsrp !== null && visible(s.t)).map(s => ({ t: s.t, v: s.rsrp })) : [];
+  if (!S.hasCellColumns || !S.counts.cell) return emptyNote(ctx, w, h, "セル情報がありません（cell 行なし）");
+  if (!serving.length && !nb.length) {
+    return emptyNote(ctx, w, h, S.serving.length
+      ? "この時間帯に在圏セルの RSRP がありません"
+      : "在圏セル（registered=true）の行がありません。周辺セルの値は「周辺セルの RSRP も表示」で確認できます");
+  }
+  const all = [...serving, ...nb].map(s => s.v);
+  const yMin = Math.floor(Math.min(...all) / 10) * 10 - 5, yMax = Math.ceil(Math.max(...all) / 10) * 10 + 5;
+  const sc = chartScales(w, h, yMin, yMax);
+  drawAxes(ctx, w, h, sc, yMin, yMax, "dBm");
+  drawChangeLines(ctx, h, sc);
+  if (nb.length) plotSeries(ctx, sc, nb, RSRP_GAP_MS, css("--neighbor"), true);
+  plotSeries(ctx, sc, serving, RSRP_GAP_MS, css("--serving"), false);
+  drawCursor(ctx, h, sc);
+}
+
+function drawLaneChart() {
+  const { ctx, w, h } = setupCanvas($("laneChart"));
+  const sc = chartScales(w, h, 0, 1);
+  ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(CHART_PAD.l, h / 2); ctx.lineTo(w - CHART_PAD.r, h / 2); ctx.stroke();
+  const vis = S.changes.filter(c => visible(c.t));
+  if (!vis.length) {
+    emptyNote(ctx, w, h - 10, S.changes.length ? "この時間帯にセルイベントはありません" : cellDiagnosis().short);
+    return;
+  }
+  for (const c of vis) {
+    const x = sc.sx(c.t), y = h / 2 - 6;
+    if (c.status === "switched") {
+      ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath();
+      ctx.fillStyle = css("--change"); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.strokeStyle = c.status === "baseline" ? css("--serving") : css("--muted"); ctx.lineWidth = 1.8; ctx.stroke();
+    }
+  }
+  ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui";
+  ctx.fillText("◆ 変更候補　○ 基準（最初の在圏セル）／判定不能", CHART_PAD.l, h - 6);
+  drawCursor(ctx, h, sc);
+}
+
+// ---------------------------------------------------------------------------
+// Cell diagnostics: distinguish "no switches" from "no serving cell info".
+function cellDiagnosis() {
+  const switched = S.changes.filter(c => c.status === "switched").length;
+  if (!S.hasCellColumns || !S.counts.cell) {
+    return { short: "セル情報なし", long: "この CSV にはセル情報（cell 行）がありません。" };
+  }
+  if (switched > 0) {
+    return { short: "", long: `在圏セルの変更候補が ${switched} 件あります（最初の在圏セルは数えていません）。API の更新間隔の制限で見逃しがありうるため、ハンドオーバーの完全な記録ではありません。` };
+  }
+  if (S.serving.length > 0) {
+    return { short: "確認できた切り替わりなし", long: `在圏セルを ${S.serving.length} 回観測し、確認できた切り替わりはありません。` };
+  }
+  const perm = S.cellStatusNotes.includes("permission_denied");
+  return {
+    short: "在圏セルを取得できず",
+    long: `在圏セル（registered=true）が一度も記録されていないため、切り替わりの有無は判定できません。周辺セルは ${S.neighbors.length} 件ありますが、在圏セルとしては扱いません。` +
+      (perm ? " cell_status に permission_denied があります（位置情報の権限）。" : "") +
+      (S.cellPoll.total ? ` cell_poll ${S.cellPoll.total} 件のうち在圏セルを含む応答は ${S.cellPoll.registeredPositive} 件です。` : " この CSV には cell_poll 行がなく、取得経路ごとの状況は分かりません。"),
+  };
+}
+
+function renderCellPanel() {
+  const d = cellDiagnosis();
+  $("cellDiag").textContent = d.long + (S.legacyChanges ? "（旧形式の cell_change: 最初の行を基準として扱っています）" : "");
+  const vis = S.changes.filter(c => visible(c.t));
+  const table = $("changeTable");
+  if (!vis.length) { table.innerHTML = ""; return; }
+  const label = { switched: "変更候補", baseline: "基準", indeterminate: "判定不能" };
+  table.innerHTML = "<thead><tr><th>経過</th><th>種別</th><th>セル</th></tr></thead><tbody>" + vis.map((c, i) =>
+    `<tr class="clickable${selectedT === c.t ? " selected" : ""}" data-t="${c.t}">` +
+    `<td>${fmtElapsed(c.t - S.t0)}</td>` +
+    `<td><span class="tag ${esc(c.status)}">${esc(label[c.status] || c.status)}</span></td>` +
+    `<td>${c.prev ? esc(c.prev) + " → " : ""}${esc(c.label)}</td></tr>`).join("") + "</tbody>";
+}
+
+// ---------------------------------------------------------------------------
+// Selection details (linked across track, charts and the event table).
+function nearestBy(arr, t, maxMs) {
+  let best = null;
+  for (const s of arr) if (Math.abs(s.t - t) <= maxMs && (!best || Math.abs(s.t - t) < Math.abs(best.t - t))) best = s;
+  return best;
+}
+function renderSelection() {
+  const el = $("selection");
+  if (selectedT === null) { el.className = "muted"; el.textContent = "軌跡の点、グラフ、またはセルイベントをクリックしてください。"; return; }
+  el.className = "";
+  const p = nearestGps(selectedT);
+  const cell = nearestBy(S.serving, selectedT, RSRP_GAP_MS);
+  const change = nearestBy(S.changes, selectedT, NEAR_MS);
+  const rows = [
+    ["経過時間", fmtElapsed(selectedT - S.t0)],
+    ["時刻", fmtClock(selectedT)],
+    ["GPS 取得時刻", p ? `${fmtClock(p.t)}（差 ${((p.t - selectedT) / 1000).toFixed(1)} 秒）` : "近く（±5 秒）に測位なし"],
+    ["速度", p ? fmtNum(p.kmh, 1, " km/h") : "—"],
+    ["水平精度", p ? (p.acc === null ? "データなし" : `±${p.acc.toFixed(1)} m${p.acc > (Number($("accLimit").value) || 30) ? "（低精度）" : ""}`) : "—"],
+    ["在圏セル", cell ? `${esc(cellLabel(cell.rat, cell.pci, cell.arfcn))}` : "近く（±10 秒）に在圏セルの記録なし"],
+    ["在圏 RSRP", cell ? fmtNum(cell.rsrp, 0, " dBm") : "—"],
+  ];
+  if (change) rows.push(["セルイベント", `${change.status === "switched" ? "変更候補" : change.status === "baseline" ? "基準" : "判定不能"}: ${esc(change.label)}`]);
+  el.innerHTML = "<dl>" + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("") + "</dl>";
+}
+
+// ---------------------------------------------------------------------------
+function redraw() {
+  if (!S) return;
+  $("rangeStartLabel").textContent = fmtElapsed(winStart() - S.t0);
+  $("rangeEndLabel").textContent = fmtElapsed(winEnd() - S.t0);
+  drawTrack(); drawSpeedChart(); drawRsrpChart(); drawLaneChart();
+  renderCellPanel(); renderSelection();
+}
+function select(t) { selectedT = t; redraw(); }
+
+function loadText(text) {
+  const session = buildSession(text);
+  if (session.error) {
+    S = null;
+    for (const id of ["overview", "filter", "mainGrid", "charts"]) $(id).classList.add("hidden");
+    const extra = [];
+    if (session.brokenRows) extra.push(["warn", `列数の合わない行・壊れた行: ${session.brokenRows} 行`]);
+    if (session.badTimeRows) extra.push(["warn", `時刻（time_utc）が読めない行: ${session.badTimeRows} 行`]);
+    showMessages([["bad", session.error], ...extra]);
+    return;
+  }
+  S = session; selectedT = null; range = [0, 1];
+  $("rangeStart").value = 0; $("rangeEnd").value = 1000;
+  const msgs = [["", `読み込みました: ${S.rows.toLocaleString()} 行。`]];
+  if (S.brokenRows) msgs.push(["warn", `列数の合わない行・壊れた行を ${S.brokenRows} 行読み飛ばしました。`]);
+  if (S.badTimeRows) msgs.push(["warn", `時刻（time_utc）が読めない行を ${S.badTimeRows} 行読み飛ばしました（推測で配置しません）。`]);
+  if (!S.gps.length) msgs.push(["warn", "GPS の測位データ（gps 行）がありません。軌跡と速度グラフは表示できません。"]);
+  if (!S.hasCellColumns || !S.counts.cell) msgs.push(["warn", "セル情報（cell 行）がありません。RSRP とセルイベントは表示できません。"]);
+  const unknown = Object.keys(S.counts).filter(e => !KNOWN_EVENTS.has(e));
+  if (unknown.length) msgs.push(["", `未対応のイベント種別は集計のみ行いました: ${unknown.join(", ")}`]);
+  showMessages(msgs);
+  for (const id of ["overview", "filter", "mainGrid", "charts"]) $(id).classList.remove("hidden");
+  projectGps();
+  renderOverview();
+  fitTrack(S.gps);
+  redraw();
+}
+const KNOWN_EVENTS = new Set(["session_start", "session_stop", "sensor_status", "sensor_rate", "accel", "gyro", "mag",
+  "pressure", "gps", "gps_status", "cell", "cell_poll", "cell_change", "cell_status", "display_info", "signal_strength",
+  "network", "http_probe"]);
+
+// ---------------------------------------------------------------------------
+// Input wiring.
+async function readFile(file) {
+  if (!file) return;
+  try { loadText(await file.text()); }
+  catch { showMessages([["bad", "ファイルを読み込めませんでした。"]]); }
+}
+$("file").addEventListener("change", e => readFile(e.target.files[0]));
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); readFile(e.dataTransfer.files[0]); });
+// Dropping elsewhere must not navigate to the file (which would show raw CSV in the tab).
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
+
+function onRangeInput() {
+  let a = Number($("rangeStart").value) / 1000, b = Number($("rangeEnd").value) / 1000;
+  if (b - a < 0.001) { if (this === $("rangeStart")) a = b - 0.001; else b = a + 0.001; }
+  range = [Math.max(0, a), Math.min(1, b)];
+  $("rangeStart").value = Math.round(range[0] * 1000); $("rangeEnd").value = Math.round(range[1] * 1000);
+  redraw();
+}
+$("rangeStart").addEventListener("input", onRangeInput);
+$("rangeEnd").addEventListener("input", onRangeInput);
+$("rangeReset").addEventListener("click", () => { range = [0, 1]; $("rangeStart").value = 0; $("rangeEnd").value = 1000; redraw(); });
+for (const id of ["showAcc", "showChanges", "accLimit", "showNeighbors"]) $(id).addEventListener("input", redraw);
+$("fit").addEventListener("click", () => { if (S) { fitTrack(S.gps.filter(p => visible(p.t))); redraw(); } });
+
+// Track: pan (drag), zoom (wheel / pinch), select (click).
+const track = $("track");
+const pointers = new Map();
+let dragMoved = false, pinchDist = null;
+track.addEventListener("pointerdown", e => {
+  track.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  dragMoved = false; track.classList.add("dragging");
+});
+track.addEventListener("pointermove", e => {
+  if (!S || !trackView || !pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchDist) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
+    pinchDist = d; dragMoved = true; return;
+  }
+  const dx = e.offsetX - prev.x, dy = e.offsetY - prev.y;
+  if (Math.abs(dx) + Math.abs(dy) > 1) dragMoved = true;
+  trackView.cx -= dx / trackView.scale; trackView.cy += dy / trackView.scale;
+  drawTrack();
+});
+const endPointer = e => {
+  pointers.delete(e.pointerId); if (pointers.size < 2) pinchDist = null;
+  track.classList.remove("dragging");
+  if (!dragMoved && S && S.gps.length && e.type === "pointerup") pickTrack(e.offsetX, e.offsetY);
+};
+track.addEventListener("pointerup", endPointer);
+track.addEventListener("pointercancel", endPointer);
+track.addEventListener("wheel", e => { if (!S || !trackView) return; e.preventDefault(); zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+function zoomAt(px, py, factor) {
+  const w = track.clientWidth, h = track.clientHeight;
+  const wx = trackView.cx + (px - w / 2) / trackView.scale, wy = trackView.cy - (py - h / 2) / trackView.scale;
+  trackView.scale = Math.min(Math.max(trackView.scale * factor, (trackFit?.scale ?? 1) / 50), 2000);
+  trackView.cx = wx - (px - w / 2) / trackView.scale; trackView.cy = wy + (py - h / 2) / trackView.scale;
+  drawTrack();
+}
+function pickTrack(px, py) {
+  const w = track.clientWidth, h = track.clientHeight;
+  let best = null, bd = 14;
+  for (const p of S.gps) {
+    if (!visible(p.t)) continue;
+    const [x, y] = toScreen(p, w, h), d = Math.hypot(x - px, y - py);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (best) select(best.t);
+}
+
+// Charts: click selects the time under the cursor (snapped to the nearest sample of that chart).
+function chartClick(canvas, samplesFn) {
+  canvas.addEventListener("click", e => {
+    if (!S) return;
+    const sc = chartScales(canvas.clientWidth, canvas.clientHeight, 0, 1);
+    const t = sc.tx(e.offsetX);
+    const near = nearestBy(samplesFn().filter(s => visible(s.t)), t, (winEnd() - winStart()) / 20);
+    select(near ? near.t : Math.min(Math.max(t, winStart()), winEnd()));
+  });
+}
+chartClick($("speedChart"), () => S.gps);
+chartClick($("rsrpChart"), () => S.serving);
+chartClick($("laneChart"), () => S.changes);
+$("changeTable").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-t]"); if (tr) select(Number(tr.dataset.t));
+});
+
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redraw, 100); });
+showMessages([["", "CSV ファイルを選ぶか、ドロップしてください。Keio Ride Logger が保存した CSV（ヘッダー行つき、UTF-8）に対応しています。"]]);
+</script>
+</body>
+</html>

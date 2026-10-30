@@ -1,0 +1,48 @@
+# Publishes the local CSV viewer (web/csv-visualizer/) to GitHub Pages.
+# Only that directory is uploaded: no measurement data, logs or app sources are published.
+# The page parses CSVs in the visitor's browser and its CSP blocks all network access.
+name: Deploy CSV viewer to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/csv-visualizer/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; do not cancel a run that is already deploying.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Refuse to publish data files
+        run: |
+          if find web/csv-visualizer -type f \( -iname '*.csv' -o -iname '*.logcat' -o -iname '*.zip' \) | grep -q .; then
+            echo "::error::web/csv-visualizer contains data files; remove them before publishing."
+            find web/csv-visualizer -type f \( -iname '*.csv' -o -iname '*.logcat' -o -iname '*.zip' \)
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: web/csv-visualizer
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

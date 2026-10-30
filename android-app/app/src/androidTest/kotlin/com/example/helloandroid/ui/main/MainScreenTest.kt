@@ -13,6 +13,9 @@ import com.example.helloandroid.recording.CellStatus
 import com.example.helloandroid.recording.MotionSensor
 import com.example.helloandroid.recording.RecorderUiState
 import com.example.helloandroid.recording.SensorRate
+import com.example.helloandroid.recording.SpeedBand
+import com.example.helloandroid.recording.SpeedDisplay
+import com.example.helloandroid.recording.SpeedUnknownReason
 import com.example.helloandroid.recording.SensorReading
 import org.junit.Rule
 import org.junit.Test
@@ -109,5 +112,47 @@ class MainScreenTest {
     state =
       state.copy(cell = CellReading(CellSnapshot(CellStatus.SERVING, servingEverSeen = true), null))
     composeTestRule.onNodeWithText("確認できた切り替わりなし", substring = true).assertExists()
+  }
+
+  @Test
+  fun speedCharacter_showsBandWithSpeed_andUnknownSeparately() {
+    var state by
+      mutableStateOf(
+        RecorderUiState(recording = true, speed = SpeedDisplay(SpeedBand.WALK, 4.2, null))
+      )
+    composeTestRule.setContent {
+      MainScreen(
+        state = state,
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("普通歩き").assertExists()
+    composeTestRule.onNodeWithText("GPS速度 4.2 km/h", substring = true).assertExists()
+
+    state = state.copy(speed = SpeedDisplay(null, null, SpeedUnknownReason.STALE))
+    composeTestRule.onNodeWithText("GPS更新なし").assertExists()
+    composeTestRule.onNodeWithText("0 km/h ではありません", substring = true).assertExists()
+  }
+
+  @Test
+  fun liveSection_isCollapsedByDefault_andShowsGpsWaiting() {
+    composeTestRule.setContent {
+      MainScreen(
+        state = RecorderUiState(recording = true, locationGranted = true),
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("GPS軌跡（概略）").assertDoesNotExist()
+    composeTestRule.onNodeWithText("▼ 開く").performClick()
+    composeTestRule.onNodeWithText("GPS軌跡（概略）").assertExists()
+    composeTestRule.onNodeWithText("GPS受信待ち（測位なし）").assertExists()
   }
 }

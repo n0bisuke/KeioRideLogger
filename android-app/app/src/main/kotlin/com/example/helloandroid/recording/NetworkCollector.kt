@@ -34,6 +34,8 @@ enum class ProbeOutcome(val csv: String) {
 }
 
 data class ProbeResult(
+  /** elapsedRealtime when the probe started. */
+  val elapsedNs: Long,
   val outcome: ProbeOutcome,
   val httpStatus: Int?,
   val durationMs: Long,
@@ -230,7 +232,7 @@ class NetworkCollector(
         },
       )
     )
-    onProbe(ProbeResult(outcome, status, durationMs, network))
+    onProbe(ProbeResult(startNs, outcome, status, durationMs, network))
   }
 
   companion object {

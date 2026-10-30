@@ -59,6 +59,9 @@ fun MainScreen(
       PermissionCard(state, onRequestPermissions)
     }
 
+    SpeedCharacter(state.speed, state.recording, state.frozen)
+    LiveSection(state)
+
     CellCard(state)
     NetworkCard(state)
     GpsCard(state)

@@ -64,6 +64,8 @@ data class RecorderUiState(
   val lastProbe: ProbeResult? = null,
   val probeCount: Int = 0,
   val probeOkCount: Int = 0,
+  val live: LiveSnapshot = LiveSnapshot(),
+  val speed: SpeedDisplay = SpeedDisplay(null, null, SpeedUnknownReason.NO_FIX),
   val savableFileName: String? = null,
   val saved: Boolean = false,
   val message: String? = null,
@@ -91,6 +93,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   @Volatile private var latestFix: Location? = null
   @Volatile private var latestCell: CellSnapshot? = null
 
+  // Bounded UI copies for the live view; the CSV stays the complete record.
+  private val liveHistory = LiveHistory()
+
+  // Fed and read on the main thread only (GPS callbacks use the main looper).
+  private val speedClassifier = SpeedClassifier()
+
   private val sink: (LogEvent) -> Unit = { event -> writer?.write(event) }
 
   private val motion =
@@ -100,7 +108,15 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     GpsCollector(
       app,
       sink,
-      onFix = { latestFix = it },
+      onFix = { loc ->
+        latestFix = loc
+        val speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else null
+        val accuracyM = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null
+        liveHistory.addFix(
+          TrackPoint(loc.elapsedRealtimeNanos, loc.latitude, loc.longitude, accuracyM, speedMps?.let { it * 3.6 })
+        )
+        speedClassifier.onFix(loc.elapsedRealtimeNanos, speedMps, accuracyM)
+      },
       onStatus = { label -> _state.update { it.copy(gpsStatus = label) } },
     )
 
@@ -108,7 +124,11 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     CellCollector(
       app,
       sink,
-      onSnapshot = { latestCell = it },
+      onSnapshot = { snap ->
+        latestCell = snap
+        snap.serving?.let { liveHistory.addSignal(SignalPoint(it.elapsedNs, it.rat, it.rsrpDbm, it.metrics)) }
+        snap.switchHistory.forEach { liveHistory.addSwitch(it.to.elapsedNs) }
+      },
       onDisplayInfo = { label -> _state.update { it.copy(displayInfo = label) } },
     )
 
@@ -118,6 +138,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
       sink,
       onNetwork = { net -> _state.update { it.copy(network = net, networkReported = true) } },
       onProbe = { result ->
+        liveHistory.addProbe(ProbePoint(result.elapsedNs, result.outcome, result.durationMs))
         _state.update {
           it.copy(
             lastProbe = result,
@@ -165,6 +186,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     latestSensors = emptyMap()
     latestFix = null
     latestCell = null
+    liveHistory.clear()
+    speedClassifier.reset()
     startedElapsedNs = Clock.nowElapsedNs()
 
     val current = _state.value
@@ -302,6 +325,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
               ageMs = (now - loc.elapsedRealtimeNanos) / 1_000_000,
             )
           },
+        live = liveHistory.snapshot(now),
+        speed = speedClassifier.display(now),
         cell =
           cellSnapshot?.let { snap ->
             CellReading(snap, snap.serving?.let { s -> (now - s.elapsedNs) / 1_000_000 })

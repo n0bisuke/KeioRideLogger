@@ -1,6 +1,6 @@
 # Keio Ride Logger
 
-京王ライナーなどの乗車中に、Android 端末の位置・携帯網・モーションセンサー情報を記録し、あとから分析できる CSV を出力する Android アプリです。記録データは端末内で扱い、外部サーバーには送信しません。
+京王ライナーなどの乗車中に、Android 端末の位置・携帯網・モーションセンサー情報を記録し、あとから分析できる CSV を出力する Android アプリです。記録データは端末内で扱い、外部サーバーには送信しません。例外は応答時間の計測（オフにできます）で、Google の接続確認用 URL に中身のない GET を送ります。位置・セル情報・端末情報は送りません。
 
 ## MVP
 
@@ -81,17 +81,46 @@ adb install -r android-app/dist/app-debug.apk
 |---|---|
 | `time_utc` | 取得時刻（ISO 8601 UTC、ミリ秒）。センサー・セルは `elapsed_realtime_ns` から換算、GPS は測位時刻 |
 | `elapsed_realtime_ns` | 端末起動からの単調時刻（プラットフォームがサンプルに付けた値） |
-| `event` | `session_start` / `session_stop` / `sensor_status` / `sensor_rate` / `accel` / `gyro` / `mag` / `pressure` / `gps` / `gps_status` / `cell` / `cell_poll` / `cell_change` / `cell_status` / `display_info` |
+| `event` | `session_start` / `session_stop` / `sensor_status` / `sensor_rate` / `accel` / `gyro` / `mag` / `pressure` / `gps` / `gps_status` / `cell` / `cell_poll` / `cell_change` / `cell_status` / `display_info` / `signal_strength` / `network` / `http_probe` |
 | `status` | 状態イベントの値（`unavailable`、`permission_denied`、`provider_disabled`、`empty` など） |
 | `lat` `lon` `speed_mps` `altitude_m` `h_accuracy_m` `provider` | GPS（`gps` 行）。高度は GPS 高度で、気圧とは別 |
 | `x` `y` `z` `accuracy` | 加速度 [m/s²]・ジャイロ [rad/s]・磁気 [µT] と、センサーの精度区分 |
 | `pressure_hpa` | 気圧 [hPa]（`pressure` 行） |
 | `rat` `override_rat` | セルの方式（LTE / NR など）と、`display_info` 行の表示種別（`NR_NSA` など） |
-| `cell_id` `pci` `tac` `arfcn` `bands` `rsrp_dbm` | セル情報。`bands` は `;` 区切り |
+| `cell_id` `pci` `tac` `arfcn` `bands` | セル情報。`bands` は `;` 区切り |
+| `rsrp_dbm` | LTE は RSRP、NR は SS-RSRP [dBm] |
+| `lte_rsrq_db` `lte_rssnr_db` `lte_rssi_dbm` `lte_cqi` | LTE の RSRQ [dB]・RSSNR [dB]・RSSI [dBm]・CQI。LTE の行だけに入る |
+| `nr_ss_rsrq_db` `nr_ss_sinr_db` `nr_csi_rsrp_dbm` `nr_csi_rsrq_db` `nr_csi_sinr_db` | NR の SS-RSRQ [dB]・SS-SINR [dB]・CSI-RSRP [dBm]・CSI-RSRQ [dB]・CSI-SINR [dB]。NR の行だけに入る |
 | `registered` | 在圏セルなら `true`、周辺セルなら `false` |
 | `age_ms` | セル情報が取得されてから記録されるまでの経過時間 |
+| `transport` `validated` | 既定ネットワークの経路（`cellular` / `wifi` / `vpn` など、複数は `+` 区切り）と、インターネット接続の確認済み（`NET_CAPABILITY_VALIDATED`）かどうか。`network` 行と `http_probe` 行に入る |
+| `http_status` `duration_ms` | 応答時間計測の HTTP ステータスと所要時間 [ms]（`http_probe` 行） |
 | `note` | 補足。`cell` / `cell_poll` 行は取得経路 `src=request|cached|listener`、`sensor_status` 行はセンサーの `min_delay_us` など、`sensor_rate` 行は端末からの配信頻度（`received_hz`）と記録頻度（`recorded_hz`） |
 
-取得間隔の目安は、加速度・ジャイロ 20 Hz、磁気 5 Hz、気圧 1 Hz、GPS 1 秒、セル情報 2 秒です。`cell_change` は、在圏セルの組み合わせ（方式、Cell ID、PCI、ARFCN）が前回と変わったときに出す「観測したセル変更」で、ハンドオーバーそのものを示すものではありません。
+取得間隔の目安は、加速度・ジャイロ 20 Hz、磁気 5 Hz、気圧 1 Hz、GPS 1 秒、セル情報 2 秒、応答時間 10 秒です。値が取れなかった指標は空欄で、0 で埋めることはありません。
+
+`cell_change` 行は在圏セル（`registered=true`）の切り替わり判定で、`status` は次のいずれかです。`baseline` は最初に得た在圏セルで、切り替わりには数えません。`switched` は在圏セルが変わったもので、方式・Cell ID・PCI・ARFCN のうち両方に値がある項目で比べます。`indeterminate` は比べられる識別子がなく、判定できなかったものです。`note` に累計の切り替わり回数と、直前のセルを残します。周辺セルの変化は数えません。Android の更新間隔に制限があるため、短い切り替わりは見逃すことがあり、ハンドオーバーの完全な記録ではありません。
+
+`signal_strength` 行は TelephonyManager の SignalStrength（接続中の信号）です。NSA の NR 側のように、在圏セルとしては返らない信号も入ります。セル識別子はありません。
 
 セル情報は3つの経路から取ります。`request` はデータ通信の回線に紐づけた `requestCellInfoUpdate()`、`cached` は全モデム分の `allCellInfo`（キャッシュ）、`listener` は `CellInfoListener`（Android 12 以降）です。`cell` 行は `request` 経路のセルをすべて記録し、ほかの経路は在圏セルだけを記録します。`cell_poll` 行は応答ごとの件数（総数、在圏数、方式別）と状態（`ok` / `empty` / `no_response` / `error`）で、セル ID などの識別子は含みません。セッション開始時の `cell_status` 行には、回線・モデムの状態を真偽値と件数だけで残します。
+
+### 通信経路と応答時間
+
+`network` 行は、アプリの既定ネットワークが変わったとき（`default_changed`）、経路やインターネット接続の確認状態が変わったとき（`capabilities`）、失われたとき（`lost`）に記録します。`note` の `net=` はセッション内の通し番号で、端末やネットワークの識別子ではありません。
+
+`http_probe` 行は応答時間の計測です。仕様は次のとおりです。
+
+- 接続先: `https://connectivitycheck.gstatic.com/generate_204`（Android 自身が接続確認に使う Google の URL。本文が空の 204 応答が返る）
+- 間隔: 10 秒ごと。タイムアウトは DNS 解決から応答の受信まで含めて 5 秒
+- 毎回新しく接続します（`Connection: close`、キャッシュなし、リダイレクトに従わない）。そのため `duration_ms` には DNS・TCP・TLS の時間が含まれます
+- `status` は `ok` / `http_error` / `timeout` / `error` のいずれか。`error` のときは `note` に例外の種類を残します
+- 送るのは中身のない GET だけです。位置・セル情報・端末情報は送りません。接続先からは送信元の IP アドレスとアクセスした時刻が見えます
+- 計測開始前に画面のスイッチでオフにできます。オフのときは `session_start` 行の `note` に `probe=off` と残ります
+
+### CSV ビューア
+
+`web/csv-visualizer/index.html` をブラウザで開いて CSV を選ぶと、GPS 軌跡の概略図、速度と在圏セル RSRP の時系列グラフ、セル変更の時系列を表示します。軌跡・グラフ・セルイベントの表は選択した時刻で連動し、時間帯で絞り込めます。CSV はブラウザの中だけで読み込み、外部への通信は CSP で禁止しています。使い方・対応形式・確認項目は [`web/csv-visualizer/README.md`](web/csv-visualizer/README.md) を参照してください。
+
+`tools/track-viewer.html` は、軌跡だけを表示する以前の簡易版です。
+
