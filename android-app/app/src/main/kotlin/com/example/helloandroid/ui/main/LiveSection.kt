@@ -23,11 +23,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
@@ -148,6 +150,9 @@ private fun TrackMap(state: RecorderUiState, mapTiles: MapTiles?, onMapEnabledCh
   val outline = MaterialTheme.colorScheme.outline
   val current = MaterialTheme.colorScheme.error
   val plainBackground = MaterialTheme.colorScheme.surfaceVariant
+  // Fixed colours (not theme): must contrast with OSM tiles, whose roads are orange/yellow/white.
+  val trackColor = Color(0xFFD0156C)
+  val trackEdge = Color(0xFF3A0020)
   val stale = state.frozen || (state.gps?.ageMs ?: 0) > GPS_STALE_MS
   val measurer = rememberTextMeasurer()
   val labelStyle = TextStyle(fontSize = 10.sp, color = Color(0xFF222222))
@@ -169,7 +174,8 @@ private fun TrackMap(state: RecorderUiState, mapTiles: MapTiles?, onMapEnabledCh
 
   Box(Modifier.fillMaxWidth().height(240.dp).onSizeChanged { sizePx = it }) {
     Canvas(
-      Modifier.matchParentSize().semantics { contentDescription = "GPS測位軌跡の概略図" }
+      // clipToBounds: edge tiles extend past the canvas and must not cover the text around it.
+      Modifier.matchParentSize().clipToBounds().semantics { contentDescription = "GPS測位軌跡の概略図" }
     ) {
       val v = view ?: return@Canvas
       drawRect(plainBackground)
@@ -195,7 +201,10 @@ private fun TrackMap(state: RecorderUiState, mapTiles: MapTiles?, onMapEnabledCh
       }
       // Lines only within runs without GPS gaps.
       for (run in splitAtGaps(track, GPS_GAP_NS) { it.elapsedNs }) {
-        for (i in 1 until run.size) drawLine(primary, at(run[i - 1]), at(run[i]), strokeWidth = 5f)
+        // Dark outer edge + white casing + colour: readable on light and dark map areas alike.
+        for (i in 1 until run.size) drawLine(trackEdge, at(run[i - 1]), at(run[i]), strokeWidth = 13f, cap = StrokeCap.Round)
+        for (i in 1 until run.size) drawLine(Color.White, at(run[i - 1]), at(run[i]), strokeWidth = 10f, cap = StrokeCap.Round)
+        for (i in 1 until run.size) drawLine(trackColor, at(run[i - 1]), at(run[i]), strokeWidth = 6f, cap = StrokeCap.Round)
       }
       // Points: filled = good accuracy, hollow = low accuracy (shape, not only colour).
       for (p in track) {
@@ -204,7 +213,8 @@ private fun TrackMap(state: RecorderUiState, mapTiles: MapTiles?, onMapEnabledCh
           drawCircle(Color.White, 6f, at(p))
           drawCircle(warn, 6f, at(p), style = Stroke(width = 3f))
         } else {
-          drawCircle(primary, 4f, at(p))
+          drawCircle(Color.White, 6f, at(p))
+          drawCircle(trackColor, 4f, at(p))
         }
       }
       // Current (or last) position.
