@@ -1,0 +1,38 @@
+
+name: keiou-takao
+
+services:
+  android:
+    image: android-kotlin:latest
+    platform: linux/amd64
+    working_dir: /workspace/android-app
+    stdin_open: true
+    tty: true
+
+    volumes:
+      # Source code (Macと共有)
+      - .:/workspace
+
+      # Gradle caches
+      - gradle-cache:/root/.gradle
+      - project-gradle:/workspace/android-app/.gradle
+
+      # Build outputs
+      - root-build:/workspace/android-app/build
+      - app-build:/workspace/android-app/app/build
+
+      # Claude Code settings and authentication
+      - claude-config:/root/.claude
+
+    environment:
+      GRADLE_USER_HOME: /root/.gradle
+      CLAUDE_CONFIG_DIR: /root/.claude
+
+    command: /bin/bash
+
+volumes:
+  gradle-cache:
+  project-gradle:
+  root-build:
+  app-build:
+  claude-config:

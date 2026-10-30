@@ -1,0 +1,25 @@
+
+# Gradle
+.gradle/
+**/.gradle/
+**/build/
+**/.kotlin/
+
+# Android
+local.properties
+**/local.properties
+*.apk
+*.aab
+.idea/
+*.iml
+
+# Output
+dist/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
