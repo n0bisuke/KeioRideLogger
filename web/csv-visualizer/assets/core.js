@@ -136,6 +136,26 @@ const KRL = (() => {
         case "network":
           s.network.push({ t: x.t, status: g("status"), transport: g("transport") || null, validated: g("validated") === "" ? null : g("validated") === "true" });
           break;
+        case "accel": {
+          const ax = num(g("x")), ay = num(g("y")), az = num(g("z"));
+          if (ax !== null && ay !== null && az !== null) s.accel.push({ t: x.t, x: ax, y: ay, z: az });
+          break;
+        }
+        case "pressure": {
+          const hpa = num(g("pressure_hpa"));
+          if (hpa !== null) s.pressure.push({ t: x.t, v: hpa });
+          break;
+        }
+        case "sensor_status": {
+          const kind = /^([a-z]+)/.exec(g("note") || "");
+          if (kind) s.sensorStatus[kind[1]] = g("status");
+          break;
+        }
+        case "sensor_rate": {
+          const note = g("note") || "", kind = /sensor=([a-z]+)/.exec(note), hz = /recorded_hz=([0-9.]+)/.exec(note);
+          if (kind && hz) s.sensorRates[kind[1]] = Number(hz[1]);
+          break;
+        }
         case "http_probe":
           s.probes.push({ t: x.t, status: g("status"), ms: num(g("duration_ms")), http: num(g("http_status")), transport: g("transport") || null });
           break;
@@ -150,6 +170,7 @@ const KRL = (() => {
     return {
       kind, t0: 0, t1: 1, rows: 0, brokenRows: 0, badTimeRows: 0, hasSessionBounds: false, hasCellColumns: true,
       gps: [], serving: [], neighbors: [], changes: [], network: [], probes: [], counts: {},
+      accel: [], pressure: [], sensorStatus: {}, sensorRates: {},
       cellPoll: { total: 0, registeredPositive: 0 }, cellStatusNotes: [], legacyChanges: 0, unknownEvents: [],
       cellNames: new Map(),
     };
@@ -326,6 +347,61 @@ const KRL = (() => {
   };
 
   // -------------------------------------------------------------------------
+  // Speed character: same rules as SpeedState.kt (Android is the reference implementation).
+  // Bands [km/h, lower bound inclusive], in sprite-sheet order (4x2 sheet, 7 frames, last cell empty).
+  const SPEED_BANDS = [
+    { label: "停止", min: 0 }, { label: "ゆっくり歩き", min: 1 }, { label: "普通歩き", min: 3 }, { label: "走る", min: 6 },
+    { label: "自転車くらい", min: 15 }, { label: "車くらい", min: 30 }, { label: "京王ライナー高速域", min: 90 },
+  ];
+  const SPEED = { WINDOW_MS: 5000, STALE_MS: 5000, MAX_ACC_M: 30, MIN_MARGIN_KMH: 0.5, REL_MARGIN: 0.1, REPLAY_MS: 60000 };
+  const bandOf = kmh => { let i = 0; for (let k = 0; k < SPEED_BANDS.length; k++) if (kmh >= SPEED_BANDS[k].min) i = k; return i; };
+  const bandMax = i => (i + 1 < SPEED_BANDS.length ? SPEED_BANDS[i + 1].min : Infinity);
+
+  /** Median of the last 5 s of valid speeds + boundary hysteresis + unknown states (mirrors SpeedClassifier). */
+  class SpeedClassifier {
+    constructor() { this.samples = []; this.lastFixT = null; this.lastReason = "NO_FIX"; this.band = null; }
+    onFix(t, kmh, acc) {
+      this.lastFixT = t;
+      if (acc === null || acc === undefined || !Number.isFinite(acc) || acc > SPEED.MAX_ACC_M) this.lastReason = "LOW_ACCURACY";
+      else if (kmh === null || kmh === undefined || !Number.isFinite(kmh) || kmh < 0) this.lastReason = "NO_SPEED";
+      else { this.lastReason = null; this.samples.push({ t, kmh }); }
+      this.samples = this.samples.filter(s => t - s.t <= SPEED.WINDOW_MS);
+    }
+    display(now) {
+      const reason = this.lastFixT === null ? "NO_FIX" : now - this.lastFixT > SPEED.STALE_MS ? "STALE" : this.lastReason;
+      const valid = this.samples.filter(s => this.lastFixT - s.t <= SPEED.WINDOW_MS);
+      if (reason || !valid.length) { this.band = null; return { band: null, kmh: null, reason: reason || "NO_SPEED" }; }
+      const v = valid.map(s => s.kmh).sort((a, b) => a - b), m = v.length >> 1;
+      const kmh = v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+      const target = bandOf(kmh);
+      if (this.band === null || target === this.band) this.band = target;
+      else {
+        const up = target > this.band;
+        const boundary = up ? bandMax(this.band) : SPEED_BANDS[this.band].min;
+        const margin = Math.max(SPEED.MIN_MARGIN_KMH, SPEED.REL_MARGIN * boundary);
+        if (up ? kmh >= boundary + margin : kmh < boundary - margin) this.band = target;
+      }
+      return { band: this.band, kmh, reason: null };
+    }
+  }
+  const SPEED_REASONS = { NO_FIX: "GPS待ち", STALE: "GPS更新なし", LOW_ACCURACY: "精度不足", NO_SPEED: "速度不明" };
+
+  /** State at [now]: replays the fixes of the preceding minute, so CSV and BLE give the same answer. */
+  function speedStateAt(gps, now) {
+    const c = new SpeedClassifier();
+    for (const p of gps) if (p.t > now - SPEED.REPLAY_MS && p.t <= now) { c.onFix(p.t, p.kmh, p.acc); c.display(p.t); }
+    return c.display(now);
+  }
+
+  /** Integer source rectangle of frame [i] in a 4x2 sheet, so neighbouring frames never bleed. */
+  function spriteFrame(w, h, i) {
+    const col = i % 4, row = Math.floor(i / 4);
+    const x0 = Math.floor(col * w / 4), x1 = Math.floor((col + 1) * w / 4);
+    const y0 = Math.floor(row * h / 2), y1 = Math.floor((row + 1) * h / 2);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  // -------------------------------------------------------------------------
   // Shared lookups.
   function nearestByTime(arr, t, maxMs) {
     let lo = 0, hi = arr.length - 1;
@@ -334,6 +410,23 @@ const KRL = (() => {
     let best = arr[lo];
     if (lo > 0 && Math.abs(arr[lo - 1].t - t) < Math.abs(best.t - t)) best = arr[lo - 1];
     return Math.abs(best.t - t) <= maxMs ? best : null;
+  }
+
+  /**
+   * Distance in km from a point to a polyline of [lat, lon] waypoints (local flat approximation,
+   * fine for a few tens of km). Used only to say "off the planned route", never to snap positions.
+   */
+  function distanceToPolylineKm(lat, lon, waypoints) {
+    const k = Math.PI / 180, R = 6371.0088, cosLat = Math.cos(lat * k);
+    const xy = (a, b) => [(b - lon) * k * R * cosLat, (a - lat) * k * R];
+    let best = Infinity;
+    for (let i = 1; i < waypoints.length; i++) {
+      const [ax, ay] = xy(...waypoints[i - 1]), [bx, by] = xy(...waypoints[i]);
+      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+      const u = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+      best = Math.min(best, Math.hypot(ax + u * dx, ay + u * dy));
+    }
+    return best;
   }
 
   /** JST wall-clock helpers (the timetable is in JST regardless of the viewer's zone). */
@@ -353,6 +446,7 @@ const KRL = (() => {
     GPS_GAP_MS, SIGNAL_GAP_MS, NEAR_MS, KNOWN_EVENTS, BLE, LIVE_MAX_AGE_MS, LIVE_MAX_POINTS, TILE,
     parseCsv, buildCsvSession, emptySession, cellKey, nameFor, cellLabelRaw, cellDiagnosis,
     bleParseFragment, BleReassembler, bleDecode, LiveStore, merc, nearestByTime, jstClock, jstTimeOnDay,
+    SPEED_BANDS, SPEED, SPEED_REASONS, SpeedClassifier, speedStateAt, spriteFrame, distanceToPolylineKm,
   };
 })();
 

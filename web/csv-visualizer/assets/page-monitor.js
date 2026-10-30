@@ -6,5 +6,6 @@ KRLApp.start({
   otherPage: { href: "keio-mttakao3/", label: "Mt.TAKAO 3号 LT デモへ →" },
   travelModes: ["未設定", "徒歩", "自転車", "車", "電車", "その他"],
   showDistance: true,
+  assetBase: "",
   route: null,
 });

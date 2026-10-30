@@ -1,4 +1,4 @@
-// Keio Ride Logger dashboard UI shared by the movement monitor (/) and the Mt.TAKAO 3 LT page.
+      if (!se.noMarks) for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);// Keio Ride Logger dashboard UI shared by the movement monitor (/) and the Mt.TAKAO 3 LT page.
 // Pages differ only by the config passed to KRLApp.start(). Data (CSV or BLE) stays in memory:
 // nothing is uploaded, stored, or logged. Only OpenStreetMap tiles are fetched, when the map is on.
 "use strict";
@@ -96,8 +96,12 @@ const KRLApp = (() => {
       <p>CSV と BLE で受け取ったデータは、このブラウザのメモリ上でだけ扱います。アップロード・送信・保存はしません（ページを閉じると消えます）。背景地図をオンにすると、表示範囲の地図タイルを OpenStreetMap から取得するため、タイル座標（おおよその表示範囲）とあなたの IP アドレスが OpenStreetMap に伝わります。CSV の中身、個々の測位点、Cell ID は送りません。Android 端末が行う HTTP 応答時間の計測は、端末自身の通信で、このページの通信ではありません。BLE 接続には HTTPS と Web Bluetooth 対応ブラウザ（Chrome / Edge など）が必要です。</p>
     </details>
   </section>
-  ${cfg.route ? `<section class="panel route" aria-labelledby="h-route"><h2 id="h-route">走行ルートとセル観測 <span class="tag">ルート概略・縮尺なし</span></h2><canvas id="routeCanvas" class="route-canvas" aria-label="ルート概略図"></canvas><div class="routenote" id="routeNote"></div>
-    <div class="markerrow"><label>実測メモ <select id="markerLabel">${cfg.route.memoLabels.map(l => `<option>${esc(l)}</option>`).join("")}</select></label><button id="addMarker" type="button">選択中の時刻に追加</button><span id="markerList" class="muted"></span></div></section>` : ""}
+  ${cfg.route ? `<section class="panel route" aria-labelledby="h-route">
+    <div class="routehead"><h2 id="h-route">予定ルート <span class="tag">概略・縮尺なし・時刻は公式時刻表の予定</span></h2>
+      <span class="chip routestatus" id="routeStatus">GPS 位置なし</span>
+      <span class="markerrow"><label>実測メモ <select id="markerLabel">${cfg.route.memoLabels.map(l => `<option>${esc(l)}</option>`).join("")}</select></label><button id="addMarker" type="button">選択中の時刻に追加</button><span id="markerList" class="muted small"></span></span></div>
+    <canvas id="routeCanvas" class="route-canvas" aria-label="ルート概略図"></canvas>
+    <details class="routenote"><summary>この図について</summary><span id="routeNote"></span></details></section>` : ""}
   <div class="grid">
     <section class="panel mappanel" aria-labelledby="h-map">
       <h2 id="h-map">GPS軌跡・概略 <span class="tag" id="mapTag">背景: OpenStreetMap</span></h2>
@@ -114,6 +118,8 @@ const KRLApp = (() => {
       <p class="legend">太線＝連続した測位（5 秒を超える欠測はつなぎません）・● 精度 ${LOW_ACC_M} m 以内・○ 低精度・◎ 最新位置（灰色は古い位置）・◆ 観測変更候補・× HTTP 失敗。GPS の座標そのままで、道路や線路への補正はしていません。</p>
     </section>
     <section class="side" aria-label="現在のネットワーク指標">
+      <div class="panel character"><canvas id="charCanvas" class="sprite" aria-label="速度キャラクター"></canvas>
+        <div><b id="charLabel">—</b><div id="charSub" class="small muted"></div><div class="small muted">GPS 速度に合わせた演出です。乗り物を判定したものではありません。</div></div></div>
       <div class="cards" id="cards"></div>
       <div class="panel"><h2>セル変更の履歴</h2><p class="muted small" id="cellDiag"></p><div class="history"><table id="history"></table></div></div>
       ${cfg.travelModes ? `<div class="panel small"><label>移動手段メモ（表示用・自動判定しません） <select id="travelMode">${cfg.travelModes.map(m => `<option>${esc(m)}</option>`).join("")}</select></label></div>` : ""}
@@ -141,6 +147,13 @@ const KRLApp = (() => {
     <h3>セル変更の時系列</h3><canvas id="chLane" class="chart lane"></canvas>
     <p class="small muted">◆ 観測変更候補（縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。</p>
   </section>
+  <details class="panel sensors" id="sensorsPanel"><summary><h2>補助センサー（加速度・気圧）</h2></summary>
+    <p class="small muted" id="sensorNote"></p>
+    <div class="charts">
+      <div><h3>端末の加速度 [m/s²]（重力を含む端末座標系の x・y・z。列車の進行方向とは限らない）</h3><canvas id="chAccel" class="chart"></canvas><p class="small muted">実線 x　破線 y　点線 z。描画のときだけ 1 ピクセル幅ごとの最小・最大に間引きます（データは間引きません）</p></div>
+      <div><h3>気圧 [hPa]（補助観測。標高には換算しません）</h3><canvas id="chPressure" class="chart"></canvas><p class="small muted">車内の空調やセンサーの個体差でも変わります</p></div>
+    </div>
+  </details>
   <section class="panel" id="selectionPanel"><h2>選択中の時刻</h2><div id="selection" class="muted">地図の点、グラフ、または履歴をクリックしてください。</div></section>
 </main>`;
   }
@@ -201,13 +214,24 @@ const KRLApp = (() => {
       gpsFresh ? (kmh ?? '<span class="nodata">速度なし（0 km/h ではない）</span>') : `<span class="nodata">${gps ? "GPS 更新なし" : "GPS 未測位"}</span>`,
       gps ? `最終測位 ${K.jstClock(gps.t)}（${ageText(gpsAge)}）・精度 ${fmt(gps.acc, 1, " m") ?? "不明"}` : "", stale || (gps && !gpsFresh) ? "dim" : ""));
     if (cfg.showDistance) cards.push(card("距離（参考）", distanceText(s, t), `精度 ${LOW_ACC_M} m 以内・欠測を除く測位点から`));
+    // Each radio metric keeps a one-line plain-Japanese explanation that is always visible.
+    const explained = (k, v, help, sub = "", cls = "") =>
+      `<div class="card ${cls}"><b>${k}</b><span>${v}</span><div class="help">${help}</div>${sub ? `<div class="small muted">${sub}</div>` : ""}</div>`;
     const cellFresh = cell && cellAge <= 10000;
-    cards.push(card("在圏セル",
+    const notTaken = '<span class="nodata">未取得</span>';
+    cards.push(explained("在圏セル",
       cellFresh ? `${esc(cell.rat)} ・ ${esc(K.nameFor(s, cell))}` : `<span class="nodata">${diag.key === "no_serving" ? "在圏セル情報なし" : cell ? "更新なし" : "データなし"}</span>`,
+      "端末が現在使っている携帯基地局のセル",
       cell ? `最終観測 ${K.jstClock(cell.t)}（${ageText(cellAge)}）${cell.src ? `・経路 ${esc(cell.src)}` : ""}` : "", !cellFresh ? "dim" : ""));
-    cards.push(card("電波品質",
-      cellFresh ? `RSRP ${fmt(cell.rsrp, 0, " dBm") ?? "不明"}` : '<span class="nodata">データなし</span>',
-      cellFresh ? `RSRQ ${fmt(cell.rsrq, 0, " dB") ?? "不明"}・SINR/RSSNR ${fmt(cell.snr, 0, " dB") ?? "不明"}` : "", !cellFresh ? "dim" : ""));
+    cards.push(explained("RSRP",
+      cellFresh ? (fmt(cell.rsrp, 0, " dBm") ?? notTaken) : notTaken,
+      "基準信号の強さ（0 に近いほど強い）", "", !cellFresh ? "dim" : ""));
+    cards.push(explained("RSRQ",
+      cellFresh ? (fmt(cell.rsrq, 0, " dB") ?? notTaken) : notTaken,
+      "受信品質の目安（干渉などの影響を含む）", "", !cellFresh ? "dim" : ""));
+    cards.push(explained("SINR / RSSNR",
+      cellFresh ? (fmt(cell.snr, 0, " dB") ?? notTaken) : notTaken,
+      "信号と雑音・干渉の比（高いほど信号が明瞭）", "", !cellFresh ? "dim" : ""));
     const tr = { cellular: "携帯網", wifi: "Wi-Fi", vpn: "VPN", ethernet: "有線", bluetooth: "Bluetooth" };
     cards.push(card("既定ネットワーク（Android）",
       net && net.transport ? `${esc(net.transport.split("+").map(x => tr[x] ?? "その他").join("+"))}` : '<span class="nodata">データなし</span>',
@@ -216,6 +240,7 @@ const KRLApp = (() => {
     cards.push(card("最後の HTTP 応答時間",
       probe ? `${esc(pl[probe.status] ?? probe.status)}${probe.status === "ok" && probe.ms !== null ? ` ${probe.ms} ms` : ""}` : '<span class="nodata">データなし</span>',
       probe ? `${K.jstClock(probe.t)}${probe.http ? `・HTTP ${probe.http}` : ""}${probe.transport ? `・経路 ${esc(tr[probe.transport] ?? probe.transport)}` : ""}` : ""));
+    cards.push(`<p class="card-note">RSRP・RSRQ・SINR/RSSNR は端末が観測した無線の指標で、通信速度や体感品質そのものではありません。端末や無線方式によって取得できない指標があり、その場合は「未取得」と表示します。</p>`);
     el.innerHTML = cards.join("");
     $("cellDiag").textContent = diag.text + (s.legacyChanges ? "（旧形式の cell_change: 最初の行を基準として扱っています）" : "");
   }
@@ -231,6 +256,37 @@ const KRLApp = (() => {
       d += Math.hypot(x, y) * 6371008.8;
     }
     return d >= 1000 ? `${(d / 1000).toFixed(2)} km` : `${Math.round(d)} m`;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Speed character (same bands, smoothing, hysteresis and freshness rules as the Android app)
+  let sprite = null;
+  function loadSprite() {
+    const img = new Image();
+    img.onload = () => { sprite = img; renderCharacter(); };
+    img.onerror = () => { sprite = null; renderCharacter(); };
+    img.src = `${cfg.assetBase}assets/glider_speed_sheet.png`;
+  }
+  /** Device-clock "now": CSV uses the focus time, BLE the last payload time plus time since receipt. */
+  function speedNow() {
+    if (st.view === "ble" && st.live.last) return st.live.last.payload.t + (Date.now() - st.live.last.receivedAt);
+    return focusT();
+  }
+  function renderCharacter() {
+    const s = session();
+    const state = s ? K.speedStateAt(s.gps, speedNow()) : null;
+    const band = state && state.band !== null ? K.SPEED_BANDS[state.band] : null;
+    $("charLabel").textContent = !s ? "データ待ち" : band ? band.label : K.SPEED_REASONS[state.reason];
+    $("charSub").textContent = !s ? "" : band ? `GPS 速度 ${state.kmh.toFixed(1)} km/h（直近 5 秒の中央値）${state.band === K.SPEED_BANDS.length - 1 ? "・演出上の速度帯で、列車の判定や速度計ではありません" : ""}` : "GPS 速度 不明（0 km/h ではありません）";
+    const c = $("charCanvas");
+    const { ctx, w, h } = setupCanvas(c);
+    if (!sprite) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui"; ctx.textAlign = "center"; ctx.fillText(band ? band.label : "—", w / 2, h / 2); ctx.textAlign = "left"; return; }
+    const f = K.spriteFrame(sprite.naturalWidth || sprite.width, sprite.naturalHeight || sprite.height, band ? state.band : 0);
+    const scale = Math.min(w / f.w, h / f.h), dw = f.w * scale, dh = f.h * scale;
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = band ? 1 : 0.25;
+    ctx.drawImage(sprite, f.x, f.y, f.w, f.h, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.globalAlpha = 1;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -473,7 +529,7 @@ const KRLApp = (() => {
     const { ctx, w, h } = setupCanvas($(id));
     const s = session();
     if (!s) return emptyNote(ctx, w, h, "データ未読み込み");
-    const vis = series.map(se => ({ ...se, pts: se.pts.filter(p => p.v !== null && Number.isFinite(p.v) && inWin(p.t)) }));
+    let vis = series.map(se => ({ ...se, pts: se.pts.filter(p => p.v !== null && Number.isFinite(p.v) && inWin(p.t)) }));
     const vals = vis.flatMap(se => se.pts.map(p => p.v));
     if (!vals.length) { emptyNote(ctx, w, h, emptyText); const sc = scales(w, h, 0, 1); verticals(ctx, h, sc); return; }
     let yMin = Math.min(...vals), yMax = Math.max(...vals);
@@ -482,9 +538,11 @@ const KRLApp = (() => {
     const sc = scales(w, h, yMin, yMax);
     axes(ctx, w, h, sc, yMin, yMax, unit);
     verticals(ctx, h, sc);
+    // Dense series (20 Hz sensors) are drawn as a per-pixel min/max envelope; the data is untouched.
+    vis = vis.map(se => (se.downsample && se.pts.length > 2 * w ? { ...se, pts: envelope(se.pts, sc) } : se));
     for (const se of vis) {
       if (se.gapMs) {
-        ctx.save(); ctx.strokeStyle = se.color; ctx.lineWidth = 2; if (se.dashed) ctx.setLineDash([6, 4]);
+        ctx.save(); ctx.strokeStyle = se.color; ctx.lineWidth = se.noMarks ? 1.5 : 2; if (se.dash || se.dashed) ctx.setLineDash(se.dash || [6, 4]);
         for (let i = 1; i < se.pts.length; i++) {
           const a = se.pts[i - 1], b = se.pts[i];
           if (b.t - a.t > se.gapMs) continue;
@@ -495,6 +553,20 @@ const KRLApp = (() => {
       for (const p of se.pts) mark(ctx, p.mark || "dot", sc.sx(p.t), sc.sy(p.v), se.color);
     }
   }
+  function envelope(pts, sc) {
+    const out = [];
+    let col = null, lo = null, hi = null;
+    const flush = () => { if (lo) { if (lo.t <= hi.t) out.push(lo, hi); else out.push(hi, lo); } };
+    for (const p of pts) {
+      const c = Math.round(sc.sx(p.t));
+      if (c !== col) { flush(); col = c; lo = hi = p; continue; }
+      if (p.v < lo.v) lo = p;
+      if (p.v > hi.v) hi = p;
+    }
+    flush();
+    return out;
+  }
+
   function renderCharts() {
     const s = session();
     const sv = s ? s.serving : [];
@@ -537,6 +609,31 @@ const KRLApp = (() => {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Auxiliary sensors (CSV only; BLE does not carry sensor values yet)
+  function renderSensors() {
+    if (!$("sensorsPanel").open) return;
+    const s = session();
+    const note = $("sensorNote");
+    if (st.view === "ble") {
+      note.textContent = "BLE ライブでは未対応です（加速度・気圧は CSV でだけ表示します）。";
+      chart("chAccel", [], "m/s²", "BLE ライブでは未対応（CSV のみ）");
+      chart("chPressure", [], "hPa", "BLE ライブでは未対応（CSV のみ）");
+      return;
+    }
+    const rate = k => (s && Number.isFinite(s.sensorRates[k]) ? `${s.sensorRates[k].toFixed(1)} Hz` : "不明");
+    note.textContent = s ? `記録頻度（この CSV の実測）: 加速度 ${rate("accel")}・気圧 ${rate("pressure")}。目標値（加速度 20 Hz・気圧 1 Hz）とは端末によって異なります。センサーの変化と通信の変化の因果関係は示しません。` : "";
+    const acc = s ? s.accel : [];
+    const unavailable = k => s && s.sensorStatus[k] === "unavailable";
+    chart("chAccel", [
+      { pts: acc.map(a => ({ t: a.t, v: a.x })), color: css("--gps"), gapMs: 1000, noMarks: true, downsample: true },
+      { pts: acc.map(a => ({ t: a.t, v: a.y })), color: css("--rsrq"), gapMs: 1000, noMarks: true, downsample: true, dash: [6, 3] },
+      { pts: acc.map(a => ({ t: a.t, v: a.z })), color: css("--snr"), gapMs: 1000, noMarks: true, downsample: true, dash: [2, 3] },
+    ], "m/s²", unavailable("accel") ? "この端末では未取得（加速度センサーなし）" : "加速度の記録がありません");
+    chart("chPressure", [{ pts: (s ? s.pressure : []).map(p => ({ t: p.t, v: p.v })), color: css("--http"), gapMs: 5000, downsample: true }],
+      "hPa", unavailable("pressure") ? "この端末では未取得（気圧センサーなし）" : "気圧の記録がありません");
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Route schematic and timetable (only when the page config has a route)
   function planMarkers() {
     const s = session();
@@ -548,40 +645,54 @@ const KRLApp = (() => {
     if (!cfg.route) return;
     const { ctx, w, h } = setupCanvas($("routeCanvas"));
     const stations = cfg.route.stations;
-    const x = i => 60 + i * (w - 120) / (stations.length - 1), y = h / 2;
-    ctx.strokeStyle = css("--gps"); ctx.lineWidth = 6; ctx.lineCap = "round";
+    const x = i => 70 + i * (w - 140) / (stations.length - 1), y = h / 2 - 2;
+    ctx.strokeStyle = css("--gps"); ctx.lineWidth = 5; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(x(0), y); ctx.lineTo(x(stations.length - 1), y); ctx.stroke();
     stations.forEach((stn, i) => {
-      ctx.beginPath(); ctx.arc(x(i), y, 10, 0, Math.PI * 2); ctx.fillStyle = css("--panel"); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = css("--fg"); ctx.stroke();
-      ctx.fillStyle = css("--fg"); ctx.font = "bold 15px system-ui"; ctx.textAlign = "center";
-      ctx.fillText(stn.name, x(i), y - 22);
-      ctx.font = "12px system-ui"; ctx.fillStyle = css("--plan");
-      ctx.fillText(`予定 ${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`, x(i), y + 30);
+      ctx.beginPath(); ctx.arc(x(i), y, 7, 0, Math.PI * 2); ctx.fillStyle = css("--panel"); ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = css("--fg"); ctx.stroke();
+      ctx.textAlign = "center";
+      ctx.fillStyle = css("--fg"); ctx.font = "bold 14px system-ui"; ctx.fillText(stn.name, x(i), y - 13);
+      ctx.fillStyle = css("--plan"); ctx.font = "12px system-ui"; ctx.fillText(`予定 ${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`, x(i), y + 24);
     });
     ctx.textAlign = "left";
-    // Scheduled position from the timetable (not a measurement).
     const s = session();
-    const now = s ? focusT() : null;
+    // Scheduled position from the timetable (not a measurement).
+    const planT = s ? focusT() : null;
     let note = "駅は均等配置の概略図で、距離の縮尺はありません。予定時刻は京王電鉄の公式時刻表（土休日）の掲載値で、乗車日に確認してください。";
-    if (now !== null) {
-      const ts = stations.map(stn => K.jstTimeOnDay(now, stn.hh, stn.mm));
-      const i = ts.findIndex((t, k) => k < ts.length - 1 && now >= t && now <= ts[k + 1]);
+    if (planT !== null) {
+      const ts = stations.map(stn => K.jstTimeOnDay(planT, stn.hh, stn.mm));
+      const i = ts.findIndex((t, k) => k < ts.length - 1 && planT >= t && planT <= ts[k + 1]);
       if (i >= 0) {
-        const f = (now - ts[i]) / (ts[i + 1] - ts[i]);
-        const px = x(i) + f * (x(i + 1) - x(i));
-        ctx.beginPath(); ctx.arc(px, y, 8, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = css("--plan"); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = css("--plan"); ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.fillText("予定位置", px, y + 48); ctx.textAlign = "left";
+        const px = x(i) + (planT - ts[i]) / (ts[i + 1] - ts[i]) * (x(i + 1) - x(i));
+        ctx.beginPath(); ctx.arc(px, y, 9, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2.5; ctx.strokeStyle = css("--plan"); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = css("--plan"); ctx.font = "11px system-ui"; ctx.fillText("予定位置", px + 12, y - 6);
         note += " 点線の円は、選択中の時刻から時刻表で計算した予定位置で、実測位置ではありません。";
       }
     }
-    note += " GPS の実測位置は下の地図で確認してください（概略図には投影しません）。";
+    note += ` GPS の実測位置は地図で確認してください（概略図には投影しません）。ルート外の判定は、主要駅を結んだ概略線から ${cfg.route.offRouteKm} km 以上離れているかどうかだけで行い、乗車中かどうかは判定しません。`;
     $("routeNote").textContent = note;
     $("markerList").textContent = st.markers.length ? st.markers.map(m => `${K.jstClock(m.t, false)} ${m.label}`).join("・") : "（メモなし。ページを閉じると消えます）";
+
+    // Where the real GPS position is relative to the planned route. Never claims "on board".
+    const status = $("routeStatus");
+    const posT = st.view === "ble" ? speedNow() : focusT();
+    const p = s ? lastAt(s.gps, posT) : null;
+    if (!p || posT - p.t > 10000) {
+      status.textContent = "GPS 位置なし（予定ルートとの位置関係は不明）";
+      status.className = "chip routestatus";
+    } else {
+      const km = K.distanceToPolylineKm(p.lat, p.lon, cfg.route.waypoints);
+      const off = km >= cfg.route.offRouteKm;
+      // The flat approximation is only meaningful nearby; far away just say "100 km or more".
+      const dist = km >= 100 ? "100 km 以上" : `約 ${km.toFixed(km < 10 ? 1 : 0)} km`;
+      status.textContent = off ? `ルート外で動作確認中（予定ルートから${dist}）` : "予定ルート付近（乗車中かどうかは判定しません）";
+      status.className = `chip routestatus ${off ? "off" : "near"}`;
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
   function render() {
-    renderHeader(); renderRoute(); renderCards(); renderHistory(); drawMap(); renderCharts(); renderSelection();
+    renderHeader(); renderRoute(); renderCards(); renderCharacter(); renderHistory(); drawMap(); renderCharts(); renderSensors(); renderSelection();
     const s = session();
     if (st.view === "csv" && s) {
       const [a, b] = windowRange();
@@ -732,13 +843,17 @@ const KRLApp = (() => {
         st.markers.push({ t, label: $("markerLabel").value }); st.markers.sort((a, b) => a.t - b.t); render();
       });
     }
+    $("sensorsPanel").addEventListener("toggle", renderSensors);
+    for (const id of ["chAccel", "chPressure"]) {
+      $(id).addEventListener("click", e => { if (!session()) return; const sc = scales($(id).clientWidth, $(id).clientHeight, 0, 1); select(sc.tx(e.offsetX)); });
+    }
     wireMap();
     let resize = null;
     window.addEventListener("resize", () => { clearTimeout(resize); resize = setTimeout(() => { st.map.view = null; render(); }, 120); });
     // Clock, BLE staleness and card ages move even without new data.
     setInterval(() => {
       $("clock").textContent = `${K.jstClock(Date.now())} JST`;
-      if (st.view === "ble") { renderHeader(); renderCards(); drawMap(); } else renderHeader();
+      if (st.view === "ble") { renderHeader(); renderCards(); renderCharacter(); renderRoute(); drawMap(); } else renderHeader();
     }, 1000);
   }
 
@@ -785,7 +900,9 @@ const KRLApp = (() => {
 
   function start(config) {
     cfg = config;
+    if (cfg.layout === "onescreen") document.body.classList.add("onescreen");
     buildLayout();
+    loadSprite();
     wire();
     $("clock").textContent = `${K.jstClock(Date.now())} JST`;
     bleUi(bleSupported() ? "未接続" : st.ble.state);
