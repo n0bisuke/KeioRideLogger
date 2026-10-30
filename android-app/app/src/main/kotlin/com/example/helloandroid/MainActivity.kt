@@ -1,6 +1,7 @@
 package com.example.helloandroid
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +17,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import com.example.helloandroid.recording.BleShareController
 import com.example.helloandroid.recording.RecorderViewModel
 import com.example.helloandroid.ui.main.MainScreen
 import com.example.helloandroid.ui.theme.HelloAndroidTheme
@@ -38,6 +40,11 @@ class MainActivity : ComponentActivity() {
         rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
           if (uri != null) recorder.saveTo(uri)
         }
+      // BLE share: ask for the nearby-devices permissions first; the controller reports a denial.
+      val blePermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+          recorder.setBleEnabled(true)
+        }
 
       // Keep the screen on while recording: the MVP only records while the screen is shown.
       val view = LocalView.current
@@ -54,6 +61,16 @@ class MainActivity : ComponentActivity() {
             onStop = { recorder.stop() },
             onSave = { state.savableFileName?.let(saveLauncher::launch) },
             onProbeEnabledChange = recorder::setProbeEnabled,
+            mapTiles = recorder.mapTiles,
+            onMapEnabledChange = recorder::setMapEnabled,
+            onBleEnabledChange = { enabled ->
+              val missing =
+                BleShareController.requiredPermissions().filter {
+                  checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+                }
+              if (enabled && missing.isNotEmpty()) blePermissionLauncher.launch(missing.toTypedArray())
+              else recorder.setBleEnabled(enabled)
+            },
             onRequestPermissions = {
               permissionLauncher.launch(
                 arrayOf(

@@ -1,8 +1,10 @@
 package com.example.helloandroid.ui.main
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,37 +12,47 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.helloandroid.recording.CellStatus
 import com.example.helloandroid.recording.LiveSnapshot
+import com.example.helloandroid.recording.MapTiles
+import com.example.helloandroid.recording.MapView
+import com.example.helloandroid.recording.OsmTileLoader
 import com.example.helloandroid.recording.ProbeOutcome
 import com.example.helloandroid.recording.RecorderUiState
 import com.example.helloandroid.recording.TrackPoint
 import com.example.helloandroid.recording.splitAtGaps
 import java.util.Locale
-import kotlin.math.cos
 import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.roundToInt
 
 private const val WINDOW_NS = 60_000_000_000L
 private const val GPS_GAP_NS = 5_000_000_000L
@@ -56,7 +68,12 @@ private const val PROBE_STALE_NS = 25_000_000_000L
  * CSV are untouched.
  */
 @Composable
-fun LiveSection(state: RecorderUiState, modifier: Modifier = Modifier) {
+fun LiveSection(
+  state: RecorderUiState,
+  mapTiles: MapTiles?,
+  onMapEnabledChange: (Boolean) -> Unit,
+  modifier: Modifier = Modifier,
+) {
   var expanded by rememberSaveable { mutableStateOf(false) }
   Card(modifier = modifier.fillMaxWidth()) {
     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -79,7 +96,7 @@ fun LiveSection(state: RecorderUiState, modifier: Modifier = Modifier) {
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-      TrackSketch(state)
+      TrackMap(state, mapTiles, onMapEnabledChange)
       SpeedChart(state.live)
       SignalCharts(state)
       ProbeChart(state)
@@ -88,12 +105,27 @@ fun LiveSection(state: RecorderUiState, modifier: Modifier = Modifier) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// GPS track sketch
+// GPS track on an OpenStreetMap background (or a plain background when the map is off/failing)
 
 @Composable
-private fun TrackSketch(state: RecorderUiState) {
+private fun TrackMap(state: RecorderUiState, mapTiles: MapTiles?, onMapEnabledChange: (Boolean) -> Unit) {
   val track = state.live.track
-  Text("GPS軌跡（概略）", fontWeight = FontWeight.Bold)
+  Text("GPS測位軌跡（概略）", fontWeight = FontWeight.Bold)
+  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Switch(checked = state.mapEnabled, onCheckedChange = onMapEnabledChange, enabled = mapTiles != null)
+    Text(
+      if (mapTiles == null) "背景地図: 利用できません" else "背景地図（OpenStreetMap）",
+      style = MaterialTheme.typography.bodyMedium,
+    )
+  }
+  if (state.mapEnabled && mapTiles != null) {
+    Text(
+      "地図の表示のため、表示範囲のタイル座標と端末の IP アドレスが OpenStreetMap に伝わります。" +
+        "測位点・CSV・セル情報は送りません。",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
   val status =
     when {
       !state.locationGranted -> "位置情報の権限がないため測位していません"
@@ -103,7 +135,7 @@ private fun TrackSketch(state: RecorderUiState) {
         when {
           state.frozen -> "計測停止時点の軌跡（${track.size} 点）"
           age == null -> "測位 ${track.size} 点"
-          age > GPS_STALE_MS -> "更新なし: 最終測位 ${age / 1000} 秒前（現在位置は不明。灰色の点は最後の位置）"
+          age > GPS_STALE_MS -> "更新なし: 最終測位 ${age / 1000} 秒前（現在位置は不明。灰色の印は最後の位置）"
           else -> "最新: ${age / 1000} 秒前の測位（${track.size} 点）"
         }
       }
@@ -115,73 +147,112 @@ private fun TrackSketch(state: RecorderUiState) {
   val warn = MaterialTheme.colorScheme.tertiary
   val outline = MaterialTheme.colorScheme.outline
   val current = MaterialTheme.colorScheme.error
+  val plainBackground = MaterialTheme.colorScheme.surfaceVariant
   val stale = state.frozen || (state.gps?.ageMs ?: 0) > GPS_STALE_MS
   val measurer = rememberTextMeasurer()
-  val labelStyle = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+  val labelStyle = TextStyle(fontSize = 10.sp, color = Color(0xFF222222))
 
-  Canvas(
-    Modifier.fillMaxWidth().height(220.dp).semantics { contentDescription = "GPS軌跡の概略図" }
-  ) {
-    val projected = project(track)
-    val xs = projected.map { it.second.x }
-    val ys = projected.map { it.second.y }
-    val spanX = max(xs.max() - xs.min(), 40f)
-    val spanY = max(ys.max() - ys.min(), 40f)
-    val pad = 16f
-    val scale = min((size.width - 2 * pad) / spanX, (size.height - 2 * pad) / spanY)
-    val cx = (xs.max() + xs.min()) / 2
-    val cy = (ys.max() + ys.min()) / 2
-    fun screen(o: Offset) = Offset(size.width / 2 + (o.x - cx) * scale, size.height / 2 - (o.y - cy) * scale)
+  var sizePx by remember { mutableStateOf(IntSize.Zero) }
+  val view =
+    remember(track, sizePx) {
+      MapView.fit(track.map { it.lat to it.lon }, sizePx.width.toDouble(), sizePx.height.toDouble())
+    }
+  val showMap = state.mapEnabled && mapTiles != null && view != null
+  // Read the version so a finished tile download triggers a redraw.
+  val tileVersion = mapTiles?.version?.collectAsState()?.value
+  val tiles =
+    remember(view, showMap, tileVersion) {
+      if (!showMap) emptyList()
+      else view!!.visibleTiles().map { (key, left, top) -> Triple(key, Offset(left.toFloat(), top.toFloat()), mapTiles!!.tile(key)) }
+    }
+  val tilesFailed = showMap && tiles.isNotEmpty() && mapTiles!!.anyFailed(tiles.map { it.first })
 
-    // Accuracy circles (only where they are visible but not larger than the view).
-    for ((p, o) in projected) {
-      val r = (p.accuracyM ?: continue).toFloat() * scale
-      if (r in 1.5f..size.maxDimension) {
-        drawCircle(primary.copy(alpha = 0.07f), r, screen(o))
+  Box(Modifier.fillMaxWidth().height(240.dp).onSizeChanged { sizePx = it }) {
+    Canvas(
+      Modifier.matchParentSize().semantics { contentDescription = "GPS測位軌跡の概略図" }
+    ) {
+      val v = view ?: return@Canvas
+      drawRect(plainBackground)
+      val tilePx = v.tileSizePx.toFloat()
+      for ((_, offset, image) in tiles) {
+        image ?: continue
+        drawImage(
+          image,
+          dstOffset = IntOffset(offset.x.roundToInt(), offset.y.roundToInt()),
+          // +1 px hides hairline seams between stretched tiles.
+          dstSize = IntSize(tilePx.roundToInt() + 1, tilePx.roundToInt() + 1),
+        )
       }
-    }
-    // Lines only within runs without GPS gaps.
-    for (run in splitAtGaps(projected, GPS_GAP_NS) { it.first.elapsedNs }) {
-      for (i in 1 until run.size) {
-        drawLine(primary, screen(run[i - 1].second), screen(run[i].second), strokeWidth = 4f)
+      fun at(p: TrackPoint) = Offset(v.toCanvasX(p.lon).toFloat(), v.toCanvasY(p.lat).toFloat())
+
+      // Accuracy circles (only where they are visible but not larger than the view).
+      for (p in track) {
+        val r = v.metersToPx(p.accuracyM ?: continue, p.lat).toFloat()
+        if (r in 1.5f..size.maxDimension) {
+          drawCircle(primary.copy(alpha = 0.12f), r, at(p))
+          drawCircle(primary.copy(alpha = 0.35f), r, at(p), style = Stroke(width = 1.5f))
+        }
       }
+      // Lines only within runs without GPS gaps.
+      for (run in splitAtGaps(track, GPS_GAP_NS) { it.elapsedNs }) {
+        for (i in 1 until run.size) drawLine(primary, at(run[i - 1]), at(run[i]), strokeWidth = 5f)
+      }
+      // Points: filled = good accuracy, hollow = low accuracy (shape, not only colour).
+      for (p in track) {
+        val low = p.accuracyM == null || p.accuracyM > LOW_ACCURACY_M
+        if (low) {
+          drawCircle(Color.White, 6f, at(p))
+          drawCircle(warn, 6f, at(p), style = Stroke(width = 3f))
+        } else {
+          drawCircle(primary, 4f, at(p))
+        }
+      }
+      // Current (or last) position.
+      val last = at(track.last())
+      val color = if (stale) outline else current
+      drawCircle(Color.White, 15f, last)
+      drawCircle(color, 14f, last, style = Stroke(width = 4f))
+      drawCircle(color, 6f, last)
+      // Scale bar (top-left so it never collides with the attribution).
+      val nice = listOf(5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000)
+      val pxPerMeter = v.metersToPx(1.0, track.last().lat).toFloat()
+      val meters = nice.firstOrNull { it * pxPerMeter >= 60f } ?: nice.last()
+      val label = measurer.measure(if (meters >= 1000) "${meters / 1000} km" else "$meters m", labelStyle)
+      drawRect(Color.White.copy(alpha = 0.8f), Offset(4f, 4f), Size(meters * pxPerMeter + 12f, label.size.height + 14f))
+      drawText(label, topLeft = Offset(10f, 6f))
+      val y = label.size.height + 12f
+      drawLine(Color(0xFF222222), Offset(10f, y), Offset(10f + meters * pxPerMeter, y), strokeWidth = 3f)
     }
-    // Points: filled = good accuracy, hollow = low accuracy (shape, not only colour).
-    for ((p, o) in projected) {
-      val low = p.accuracyM == null || p.accuracyM > LOW_ACCURACY_M
-      if (low) drawCircle(warn, 6f, screen(o), style = Stroke(width = 3f))
-      else drawCircle(primary, 4f, screen(o))
+    if (showMap) {
+      // Required attribution: always visible on the map while it is shown.
+      Text(
+        OsmTileLoader.ATTRIBUTION,
+        style = TextStyle(fontSize = 10.sp, color = Color(0xFF222222)),
+        modifier =
+          Modifier.align(Alignment.BottomEnd)
+            .padding(4.dp)
+            .background(Color.White.copy(alpha = 0.85f))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+      )
     }
-    // Current (or last) position.
-    val last = screen(projected.last().second)
-    val color = if (stale) outline else current
-    drawCircle(color, 14f, last, style = Stroke(width = 4f))
-    drawCircle(color, 6f, last)
-    // Scale bar.
-    val nice = listOf(5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
-    val meters = nice.firstOrNull { it * scale >= 60f } ?: nice.last()
-    val y = size.height - 8f
-    drawLine(labelStyle.color, Offset(8f, y), Offset(8f + meters * scale, y), strokeWidth = 3f)
-    drawText(measurer, if (meters >= 1000) "${meters / 1000} km" else "$meters m", Offset(8f, y - 28f), labelStyle)
+    if (tilesFailed) {
+      Text(
+        "地図タイルを取得できません（圏外・オフラインなど）。軌跡は表示を続けます。",
+        style = TextStyle(fontSize = 11.sp, color = Color.White),
+        modifier =
+          Modifier.align(Alignment.TopEnd)
+            .padding(4.dp)
+            .background(Color(0xCC1D232A))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+      )
+    }
   }
   Text(
     "● 精度 ${LOW_ACCURACY_M.toInt()} m 以内　○ 低精度　◎ 最新位置（灰色は更新なし）　薄い円は水平精度。" +
-      "5 秒を超えて測位が途切れた区間は線でつなぎません。座標をそのまま描いた図で、地図・道路・駅には合わせていません。" +
+      "5 秒を超えて測位が途切れた区間は線でつなぎません。GPS の座標をそのまま描いたもので、道路や線路には合わせていません。" +
       if (state.live.trackTruncated) "（古い点は省略し、直近の点だけを表示）" else "",
     style = MaterialTheme.typography.bodySmall,
   )
-}
-
-/** Local equirectangular projection in metres around the track's mean position. */
-private fun project(track: List<TrackPoint>): List<Pair<TrackPoint, Offset>> {
-  val lat0 = track.sumOf { it.lat } / track.size
-  val lon0 = track.sumOf { it.lon } / track.size
-  val k = Math.PI / 180
-  val r = 6_371_008.8
-  val cosLat = cos(lat0 * k)
-  return track.map { p ->
-    p to Offset(((p.lon - lon0) * k * r * cosLat).toFloat(), ((p.lat - lat0) * k * r).toFloat())
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -219,11 +290,14 @@ private fun MiniChart(
   val labelStyle = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
   val grid = MaterialTheme.colorScheme.outlineVariant
   val markColor = MaterialTheme.colorScheme.secondary
-  Canvas(Modifier.fillMaxWidth().height(110.dp).semantics { contentDescription = "$title のグラフ" }) {
-    val left = 44f
-    val right = 8f
-    val top = 8f
-    val bottom = 22f
+  Canvas(Modifier.fillMaxWidth().height(124.dp).semantics { contentDescription = "$title のグラフ" }) {
+    // Margins come from the measured label size, so tick labels fit at any screen density.
+    val tickSample = measurer.measure("-60s", labelStyle)
+    val labelH = tickSample.size.height.toFloat()
+    val left = max(measurer.measure("-000.0", labelStyle).size.width.toFloat() + 6f, 40f)
+    val right = tickSample.size.width / 2f + 4f
+    val top = labelH / 2 + 2f
+    val bottom = labelH + 8f
     var yMin = values.min()
     var yMax = values.max()
     if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1 }
@@ -238,12 +312,14 @@ private fun MiniChart(
     // Axes: min/max labels and 15 s ticks.
     drawLine(grid, Offset(left, top), Offset(left + w, top))
     drawLine(grid, Offset(left, top + h), Offset(left + w, top + h))
-    drawText(measurer, formatAxis(yMax), Offset(2f, top - 2f), labelStyle)
-    drawText(measurer, formatAxis(yMin), Offset(2f, top + h - 14f), labelStyle)
+    drawText(measurer, formatAxis(yMax), Offset(2f, top - labelH / 2), labelStyle)
+    drawText(measurer, formatAxis(yMin), Offset(2f, top + h - labelH / 2), labelStyle)
     for (sec in listOf(60, 45, 30, 15, 0)) {
       val tx = x(windowEndNs - sec * 1_000_000_000L)
       drawLine(grid, Offset(tx, top), Offset(tx, top + h))
-      drawText(measurer, if (sec == 0) "0s" else "-${sec}s", Offset(tx - 12f, top + h + 4f), labelStyle)
+      val tick = measurer.measure(if (sec == 0) "0s" else "-${sec}s", labelStyle)
+      val tickX = (tx - tick.size.width / 2f).coerceIn(0f, size.width - tick.size.width)
+      drawText(tick, topLeft = Offset(tickX, top + h + 4f))
     }
     // Cell switch candidates: dashed vertical lines.
     for (t in switchMarksNs) {

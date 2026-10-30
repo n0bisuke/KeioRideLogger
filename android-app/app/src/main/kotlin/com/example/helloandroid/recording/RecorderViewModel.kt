@@ -58,6 +58,11 @@ data class RecorderUiState(
   val cell: CellReading? = null,
   val displayInfo: String? = null,
   val probeEnabled: Boolean = true,
+  /** OpenStreetMap background behind the live track (tile requests only while shown). */
+  val mapEnabled: Boolean = true,
+  /** User switch for the BLE live share; it runs only while recording. */
+  val bleEnabled: Boolean = false,
+  val ble: BleStatus = BleStatus(),
   val network: NetworkState? = null,
   /** Set once the network callback has reported at least once this session. */
   val networkReported: Boolean = false,
@@ -98,6 +103,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
   // Fed and read on the main thread only (GPS callbacks use the main looper).
   private val speedClassifier = SpeedClassifier()
+
+  // Kept here (not in the composable) so cached tiles survive recomposition and rotation.
+  val mapTiles = OsmTileLoader(app)
+
+  private val ble = BleShareController(app) { status -> _state.update { it.copy(ble = status) } }
+  private var bleTick = 0
 
   private val sink: (LogEvent) -> Unit = { event -> writer?.write(event) }
 
@@ -166,6 +177,17 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  /** Turns the BLE share on or off; when recording, applies immediately. */
+  fun setBleEnabled(enabled: Boolean) {
+    _state.update { it.copy(bleEnabled = enabled) }
+    if (writer == null) return
+    if (enabled) ble.start() else ble.stop()
+  }
+
+  fun setMapEnabled(enabled: Boolean) {
+    _state.update { it.copy(mapEnabled = enabled) }
+  }
+
   fun setProbeEnabled(enabled: Boolean) {
     if (writer == null) _state.update { it.copy(probeEnabled = enabled) }
   }
@@ -232,10 +254,12 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     gps.start(Looper.getMainLooper())
     cell.start()
     network.start(current.probeEnabled)
+    if (current.bleEnabled) ble.start()
     tickerJob = viewModelScope.launch {
       while (isActive) {
         gps.checkStale(Clock.nowElapsedNs())
         publish()
+        if (++bleTick % 2 == 0) ble.publish(_state.value, Clock.nowUtcMs())
         delay(UI_REFRESH_MS)
       }
     }
@@ -249,6 +273,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     gps.stop()
     cell.stop()
     network.stop()
+    ble.stop()
     tickerJob?.cancel()
     tickerJob = null
     publish()
@@ -337,6 +362,8 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   }
 
   override fun onCleared() {
+    mapTiles.shutdown()
+    ble.stop()
     stop("cleared")
   }
 

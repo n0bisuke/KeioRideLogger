@@ -71,3 +71,29 @@
 - RSRPグラフはおよそ−62〜−66 dBm。コード上、グラフは`CellSnapshot.serving`（登録済みセル）から作られ、LTEではAndroidの`CellSignalStrengthLte.rsrp`をdBm値として扱う。表示範囲はAndroid APIの有効範囲（−140〜−43 dBm）に入り、強い電波として妥当な値に見える。
 - 複数のライブグラフで横軸の時間目盛り文字が下端で欠けて見えた。修正タスクを[`ROADMAP.md`](ROADMAP.md)に追加。
 - 画面上の座標、Cell ID、CSVデータは保存しない。
+
+### Androidアプリ内地図の要件追加（2026-10-30）
+
+- ユーザー要望により、Web CSVビューアに加えてAndroidアプリ内にもGPS軌跡の地図表示を追加するタスクを[`ROADMAP.md`](ROADMAP.md)に記載し、Claude Code向け指示書[`in-app-live-visualization-prompt.md`](lt/in-app-live-visualization-prompt.md)を更新した。
+- LTデモ向けにオンライン地図タイルを許容し、地図提供元へIPアドレスと表示範囲のおおよそのタイル座標が送信される旨を明示する。CSVや個別の測位点は送信しない。
+- トンネル・圏外ではタイルに依存せず、ローカルの軌跡表示と計測・CSV記録を継続する。地図提供元の帰属表示、キャッシュ、利用条件に従う。
+- 今回は要件と作業指示の記録のみ。アプリ実装、ビルド、実機確認は未実施。
+
+### BLEリアルタイム表示の最小試作タスク作成（2026-10-30）
+
+- ユーザー依頼に基づき、AndroidをBLE peripheral/GATT server、HTTPS上のWeb Bluetooth対応ブラウザをcentral/clientにする最小試作を設計し、[`ROADMAP.md`](ROADMAP.md)にP1タスク、[`ble-realtime-prototype-prompt.md`](lt/ble-realtime-prototype-prompt.md)にClaude Code向け指示を追加した。
+- 送信候補は1〜2 Hzの時刻付きライブ値（GPS、在圏セル品質/識別、セル変更候補、HTTP probe）。CSV全体や20 Hzセンサー生データ、サーバー中継、保存は対象外。ブラウザで選んだ接続先へのBLE直接送信であることを明示し、切断・権限拒否時も計測とCSV保存を続ける要件を含めた。
+- 作業ログには実機のGPS座標・Cell IDを含めていない。今回は設計とタスク作成のみで、アプリ/Web実装、ビルド、実機BLE試験は未実施。
+
+### アプリ内地図の実機表示確認（2026-10-30 23:06）
+
+- ADBで実機の計測画面を確認。OpenStreetMapの明るい地図タイル、軌跡、精度円、現在位置は表示されている。
+- 地図上端で地図の説明文が画像に重なって見え、地図下端でも凡例テキストが地図画像に重なって読みにくい。明るいOSM地図上で軌跡線も薄く、道路・線路表示と区別しにくい。
+- レイアウトの重なり調査と、明/暗背景に応じた軌跡色・縁取りの改善を[`ROADMAP.md`](ROADMAP.md)および[`in-app-live-visualization-prompt.md`](lt/in-app-live-visualization-prompt.md)へ追加。実装修正後の実機確認は未実施。
+- スクリーンショットは作業用一時領域に置き、リポジトリには追加していない。GPS座標やCell IDも作業ログに記載していない。
+
+### LT用実機キャプチャの整理（2026-10-30）
+
+- ADBで取得済みの実機スクリーンショット4点を`docs/lt/local-captures/`へコピーし、説明・キャプションを同フォルダのREADMEに記録した。発表素材一覧からも参照する。
+- 原本画像には正確な位置/軌跡やCell IDが写り得る。画像拡張子を同フォルダの`.gitignore`で除外し、`git check-ignore`で4点すべてが追跡対象外であることを確認した。公開・LT配布前に識別情報を隠したコピーを用意する。
+- READMEと発表構成から、画像の内容と公開上の注意を確認できる。画像自体はローカルにのみ存在する。

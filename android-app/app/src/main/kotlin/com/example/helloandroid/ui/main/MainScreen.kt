@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.helloandroid.recording.CellSnapshot
+import com.example.helloandroid.recording.MapTiles
 import com.example.helloandroid.recording.MotionSensor
 import com.example.helloandroid.recording.ProbeOutcome
 import com.example.helloandroid.recording.RecorderUiState
@@ -45,6 +46,9 @@ fun MainScreen(
   onRequestPermissions: () -> Unit,
   onProbeEnabledChange: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
+  mapTiles: MapTiles? = null,
+  onMapEnabledChange: (Boolean) -> Unit = {},
+  onBleEnabledChange: (Boolean) -> Unit = {},
 ) {
   Column(
     modifier =
@@ -60,7 +64,8 @@ fun MainScreen(
     }
 
     SpeedCharacter(state.speed, state.recording, state.frozen)
-    LiveSection(state)
+    LiveSection(state, mapTiles, onMapEnabledChange)
+    BleCard(state, onBleEnabledChange)
 
     CellCard(state)
     NetworkCard(state)

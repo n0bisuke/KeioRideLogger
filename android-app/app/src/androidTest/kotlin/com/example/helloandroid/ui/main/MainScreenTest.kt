@@ -150,9 +150,9 @@ class MainScreenTest {
         onProbeEnabledChange = {},
       )
     }
-    composeTestRule.onNodeWithText("GPS軌跡（概略）").assertDoesNotExist()
+    composeTestRule.onNodeWithText("GPS測位軌跡（概略）").assertDoesNotExist()
     composeTestRule.onNodeWithText("▼ 開く").performClick()
-    composeTestRule.onNodeWithText("GPS軌跡（概略）").assertExists()
+    composeTestRule.onNodeWithText("GPS測位軌跡（概略）").assertExists()
     composeTestRule.onNodeWithText("GPS受信待ち（測位なし）").assertExists()
   }
 }

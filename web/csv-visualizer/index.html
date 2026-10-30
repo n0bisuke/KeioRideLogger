@@ -77,13 +77,14 @@
   .tag.switched { color: var(--change); }
   .tag.baseline { color: var(--serving); }
   .tag.indeterminate { color: var(--muted); }
+  .stale { color: var(--bad); font-weight: 600; }
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <header>
   <h1>Keio Ride Logger CSV ビューア</h1>
-  <p class="sub">CSVはブラウザ内で読み込みます。CSVのアップロードはしません。背景地図の表示時は、OpenStreetMapへ表示範囲の地図タイルをリクエストします。</p>
+  <p class="sub">CSVはブラウザ内で読み込みます。CSVのアップロードはしません。背景地図の表示時は、OpenStreetMapへ表示範囲の地図タイルをリクエストします。その際、タイル座標（おおよその表示範囲）とあなたの IP アドレスが OpenStreetMap に伝わります。CSV の中身や個々の測位点は送りません。地図は「背景地図」のチェックで切れます。</p>
 </header>
 
 <main>
@@ -94,6 +95,18 @@
       <div class="drop" id="drop">ここに CSV をドロップしても読み込めます</div>
     </div>
     <div id="messages"></div>
+  </section>
+
+  <section class="panel" id="blePanel" aria-labelledby="h-ble">
+    <h2 id="h-ble">BLE ライブ受信（デモ）</h2>
+    <p class="sub">Android アプリの「BLE でブラウザへ共有」をオンにして計測中の端末から、GPS の位置・速度・精度、在圏セルの方式・Cell ID・PCI・電波の値、セル変更候補、HTTP 応答時間を BLE で受け取り、この画面に表示します。受信したデータはインターネットへ送らず、保存もしません（ページを閉じると消えます）。CSV の読み込みとは別に動きます。</p>
+    <div class="toolbar">
+      <button id="bleConnect" type="button">BLE接続</button>
+      <button id="bleReconnect" type="button" class="hidden">再接続</button>
+      <button id="bleDisconnect" type="button" class="hidden">切断</button>
+      <span id="bleStatus">未接続</span>
+    </div>
+    <div class="cards" id="bleCards"></div>
   </section>
 
   <section class="panel hidden" id="overview" aria-labelledby="h-ov">
@@ -115,7 +128,7 @@
 
   <div class="main-grid hidden" id="mainGrid">
     <section class="panel" aria-labelledby="h-track">
-      <h2 id="h-track">GPS軌跡・地図</h2>
+      <h2 id="h-track">GPS軌跡・概略（背景: OpenStreetMap）</h2>
       <div class="toolbar">
         <label><input type="checkbox" id="showMap" checked> 背景地図</label>
         <label><input type="checkbox" id="showAcc" checked> 精度の円</label>
@@ -868,6 +881,162 @@ $("changeTable").addEventListener("click", e => {
 
 let resizeTimer = null;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redraw, 100); });
+// ---------------------------------------------------------------------------
+// BLE live receive (Web Bluetooth). Protocol v1, same constants as BleProtocol.kt:
+// fragment = [version u8][seq u32 LE][index u8][count u8][body slice]; body = UTF-8 JSON <= 2048 B.
+// Received values are only shown here: never sent anywhere and never stored.
+const BLE_SERVICE_UUID = "20896d82-0d9e-4791-8522-22bc245b46bb";
+const BLE_CHAR_UUID = "b58ccb41-6443-4ee3-9d29-0d7e7a56cbe8";
+const BLE_VERSION = 1;
+const BLE_HEADER = 7;
+const BLE_MAX_FRAME = 2048;
+const BLE_STALE_MS = 5000;
+
+function bleParseFragment(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < BLE_HEADER || bytes[0] !== BLE_VERSION) return null;
+  const seq = (bytes[1] | (bytes[2] << 8) | (bytes[3] << 16) | (bytes[4] << 24)) >>> 0;
+  const index = bytes[5], count = bytes[6];
+  if (count === 0 || index >= count) return null;
+  return { seq, index, count, data: bytes.slice(BLE_HEADER) };
+}
+
+/** Rebuilds frames; drops incomplete, duplicate, older and malformed ones (mirrors BleReassembler.kt). */
+class BleReassembler {
+  constructor() { this.lastSeq = -1; this.seq = -1; this.parts = null; }
+  accept(bytes) {
+    const f = bleParseFragment(bytes);
+    if (!f || f.seq <= this.lastSeq) return null;
+    if (f.seq !== this.seq) {
+      if (f.seq < this.seq) return null;
+      this.seq = f.seq; this.parts = new Array(f.count).fill(null);
+    }
+    if (this.parts.length !== f.count) return null;
+    this.parts[f.index] = f.data;
+    if (this.parts.some(p => p === null)) return null;
+    const size = this.parts.reduce((n, p) => n + p.length, 0);
+    if (size > BLE_MAX_FRAME) return null;
+    const body = new Uint8Array(size);
+    let at = 0;
+    for (const p of this.parts) { body.set(p, at); at += p.length; }
+    this.lastSeq = f.seq; this.seq = -1; this.parts = null;
+    return body;
+  }
+}
+
+function bleDecode(body) {
+  try {
+    const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+    if (!o || typeof o !== "object" || o.v !== BLE_VERSION || !Number.isInteger(o.seq) || !Number.isFinite(o.t)) return null;
+    return o;
+  } catch { return null; }
+}
+
+const ble = { device: null, char: null, reassembler: null, last: null, invalid: 0, userDisconnect: false };
+
+function bleSetStatus(text, { connected = false, canReconnect = false } = {}) {
+  $("bleStatus").textContent = text;
+  $("bleDisconnect").classList.toggle("hidden", !connected);
+  $("bleReconnect").classList.toggle("hidden", !canReconnect);
+  $("bleConnect").disabled = connected;
+}
+
+const bleNum = (v, digits, unit) => (v === null || v === undefined ? "不明" : `${Number(v).toFixed(digits)}${unit}`);
+
+function bleRender() {
+  const el = $("bleCards");
+  if (!ble.last) { el.innerHTML = ""; return; }
+  const p = ble.last.payload;
+  const ageMs = Date.now() - ble.last.receivedAt;
+  const stale = ageMs > BLE_STALE_MS;
+  const card = (k, v) => `<div class="card"><b>${k}</b>${v}</div>`;
+  const gps = p.gps
+    ? `<span>${bleNum(p.gps.lat, 6, "")}, ${bleNum(p.gps.lon, 6, "")}</span><div>速度 ${p.gps.kmh === null ? "不明（0 km/h ではない）" : bleNum(p.gps.kmh, 1, " km/h")}・精度 ${p.gps.accM === null ? "不明" : "±" + bleNum(p.gps.accM, 1, " m")}・${bleNum(p.gps.ageMs / 1000, 0, " 秒前の測位")}</div>`
+    : `<span class="nodata">測位なし</span><div class="muted">${esc(p.gpsStatus ?? "")}</div>`;
+  const cellStatus = { SERVING: "在圏セルあり", NEIGHBORS_ONLY: "周辺セルのみ（在圏セル情報なし）", EMPTY: "観測データなし", NO_RESPONSE: "応答なし", ERROR: "エラー", PERMISSION_DENIED: "権限なし", UNAVAILABLE: "通信機能なし", WAITING: "応答待ち" };
+  const cell = p.cell
+    ? `<span>${esc(p.cell.rat)} PCI ${p.cell.pci ?? "?"}</span><div>Cell ID ${esc(p.cell.id ?? "不明")}・ARFCN ${p.cell.arfcn ?? "不明"}</div><div>RSRP ${bleNum(p.cell.rsrp, 0, " dBm")}・RSRQ ${bleNum(p.cell.rsrq, 0, " dB")}・SNR ${bleNum(p.cell.snr, 0, " dB")}</div>`
+    : `<span class="nodata">${esc(cellStatus[p.cellStatus] ?? "在圏セル情報なし")}</span>`;
+  const sw = p.switches === null || p.switches === undefined
+    ? '<span class="nodata">データなし</span>'
+    : `<span>${p.switches}</span><div class="muted">最初の在圏セルは数えない</div>` + (p.lastSwitch ? `<div>${fmtClock(p.lastSwitch.t)} ${esc(p.lastSwitch.from)} → ${esc(p.lastSwitch.to)}</div>` : "");
+  const transport = { cellular: "携帯網", wifi: "Wi-Fi", vpn: "VPN", ethernet: "有線", bluetooth: "Bluetooth" };
+  const net = p.net ? `${esc(p.net.transport.split("+").map(t => transport[t] ?? "その他").join("+"))}・${p.net.validated ? "接続確認済み" : "接続未確認"}` : "既定ネットワークなし";
+  const probeLabel = { ok: "成功", http_error: "HTTP エラー", timeout: "タイムアウト", error: "失敗" };
+  const probe = p.probe
+    ? `<span>${esc(probeLabel[p.probe.status] ?? p.probe.status)} ${p.probe.status === "ok" ? bleNum(p.probe.ms, 0, " ms") : ""}</span><div class="muted">${bleNum(p.probe.ageMs / 1000, 0, " 秒前")}</div>`
+    : '<span class="nodata">結果なし</span>';
+  el.innerHTML = [
+    card("最終受信", `<span class="${stale ? "stale" : ""}">${Math.round(ageMs / 1000)} 秒前${stale ? "（古い値・更新なし）" : ""}</span><div class="muted">連番 ${p.seq}・端末時刻 ${fmtClock(p.t)}${ble.invalid ? `・破棄 ${ble.invalid}` : ""}</div>`),
+    card("GPS", gps),
+    card("在圏セル", cell),
+    card("セル変更候補", sw),
+    card("通信経路", `<span>${net}</span>`),
+    card("HTTP 応答時間", probe),
+  ].join("");
+}
+
+function bleOnValue(event) {
+  const dv = event.target.value;
+  const body = ble.reassembler.accept(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+  if (!body) return;
+  const payload = bleDecode(body);
+  if (!payload) { ble.invalid++; return; }
+  ble.last = { payload, receivedAt: Date.now() };
+  bleRender();
+}
+
+async function bleOpen() {
+  ble.userDisconnect = false;
+  ble.reassembler = new BleReassembler();
+  try {
+    bleSetStatus("接続中…");
+    const server = await ble.device.gatt.connect();
+    bleSetStatus("サービスを確認中…");
+    const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+    ble.char = await service.getCharacteristic(BLE_CHAR_UUID);
+    ble.char.addEventListener("characteristicvaluechanged", bleOnValue);
+    bleSetStatus("通知を開始中…", { connected: true });
+    await ble.char.startNotifications();
+    bleSetStatus("受信中（1 秒ごと）", { connected: true });
+  } catch (e) {
+    const reason = e && e.name === "NotFoundError" ? "サービスが見つかりません（アプリの共有がオフ、または別の端末）" : "接続できませんでした";
+    bleSetStatus(`${reason}。アプリが計測中で共有オンか確認し、再接続してください。`, { canReconnect: true });
+  }
+}
+
+async function bleConnect() {
+  try {
+    ble.device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BLE_SERVICE_UUID] }] });
+  } catch (e) {
+    bleSetStatus(e && e.name === "NotFoundError" ? "端末の選択がキャンセルされました" : "端末を選べませんでした（Bluetooth がオフの可能性）");
+    return;
+  }
+  ble.device.addEventListener("gattserverdisconnected", () => {
+    if (ble.char) ble.char.removeEventListener("characteristicvaluechanged", bleOnValue);
+    ble.char = null;
+    bleSetStatus(ble.userDisconnect ? "切断しました" : "切断されました（自動では再接続しません）", { canReconnect: true });
+    bleRender();
+  });
+  await bleOpen();
+}
+
+function bleInit() {
+  if (!window.isSecureContext || !navigator.bluetooth) {
+    bleSetStatus("このブラウザでは BLE 接続を使えません。HTTPS（GitHub Pages）で、Web Bluetooth に対応したブラウザ（Android または PC の Chrome / Edge など）で開いてください。");
+    $("bleConnect").disabled = true;
+    return;
+  }
+  $("bleConnect").addEventListener("click", bleConnect);
+  $("bleReconnect").addEventListener("click", () => { if (ble.device) bleOpen(); else bleConnect(); });
+  $("bleDisconnect").addEventListener("click", () => {
+    ble.userDisconnect = true;
+    if (ble.device && ble.device.gatt.connected) ble.device.gatt.disconnect();
+  });
+  // Re-evaluate staleness even when no notification arrives.
+  setInterval(() => { if (ble.last) bleRender(); }, 1000);
+}
+bleInit();
+
 showMessages([["", "CSV ファイルを選ぶか、ドロップしてください。Keio Ride Logger が保存した CSV（ヘッダー行つき、UTF-8）に対応しています。"]]);
 </script>
 </body>
