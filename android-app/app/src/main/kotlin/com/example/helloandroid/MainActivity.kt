@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
             onStart = recorder::start,
             onStop = { recorder.stop() },
             onSave = { state.savableFileName?.let(saveLauncher::launch) },
+            onProbeEnabledChange = recorder::setProbeEnabled,
             onRequestPermissions = {
               permissionLauncher.launch(
                 arrayOf(

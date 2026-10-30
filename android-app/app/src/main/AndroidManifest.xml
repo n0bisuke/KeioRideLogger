@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- LTE/NR display type (TelephonyDisplayInfo) and data network type. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- Default-network tracking and the HTTP(S) responsiveness probe (empty GET to
+         connectivitycheck.gstatic.com/generate_204 every 10 s; no measured data is sent). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />

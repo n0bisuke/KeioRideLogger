@@ -15,15 +15,20 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.helloandroid.recording.CellSnapshot
 import com.example.helloandroid.recording.MotionSensor
+import com.example.helloandroid.recording.ProbeOutcome
 import com.example.helloandroid.recording.RecorderUiState
+import com.example.helloandroid.recording.SensorRate
 import com.example.helloandroid.recording.SensorReading
 import com.example.helloandroid.ui.theme.HelloAndroidTheme
 import java.util.Locale
@@ -38,6 +43,7 @@ fun MainScreen(
   onStop: () -> Unit,
   onSave: () -> Unit,
   onRequestPermissions: () -> Unit,
+  onProbeEnabledChange: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -47,27 +53,36 @@ fun MainScreen(
   ) {
     Text("Keio Ride Logger", style = MaterialTheme.typography.headlineSmall)
 
-    StatusCard(state, onStart, onStop, onSave)
+    StatusCard(state, onStart, onStop, onSave, onProbeEnabledChange)
 
     if (!state.locationGranted || !state.phoneStateGranted) {
       PermissionCard(state, onRequestPermissions)
     }
 
-    GpsCard(state)
     CellCard(state)
+    NetworkCard(state)
+    GpsCard(state)
     for (kind in MotionSensor.entries) {
-      SensorCard(kind, state.sensorAvailable[kind], state.sensors[kind], state.recording)
+      SensorCard(kind, state.sensorAvailable[kind], state.sensors[kind], state.recording, state.frozen)
     }
 
     Text(
-      "記録は端末内にだけ保存され、外部へは送信しません。計測は画面を表示している間だけ行います。",
+      "記録は端末内にだけ保存され、外部へは送信しません。応答時間の計測がオンのときだけ、" +
+        "Google の接続確認用 URL（connectivitycheck.gstatic.com）へ中身のない GET を 10 秒ごとに送ります。" +
+        "位置・セル情報・端末情報は送りません。計測は画面を表示している間だけ行います。",
       style = MaterialTheme.typography.bodySmall,
     )
   }
 }
 
 @Composable
-private fun StatusCard(state: RecorderUiState, onStart: () -> Unit, onStop: () -> Unit, onSave: () -> Unit) {
+private fun StatusCard(
+  state: RecorderUiState,
+  onStart: () -> Unit,
+  onStop: () -> Unit,
+  onSave: () -> Unit,
+  onProbeEnabledChange: (Boolean) -> Unit,
+) {
   Card(modifier = Modifier.fillMaxWidth()) {
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(
@@ -90,6 +105,14 @@ private fun StatusCard(state: RecorderUiState, onStart: () -> Unit, onStop: () -
             Text("CSV を保存")
           }
         }
+      }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(
+          checked = state.probeEnabled,
+          onCheckedChange = onProbeEnabledChange,
+          enabled = !state.recording,
+        )
+        Text("応答時間を計測（10 秒ごとに HTTPS で接続確認）", style = MaterialTheme.typography.bodyMedium)
       }
       if (!state.recording && state.savableFileName != null && !state.saved) {
         Text(
@@ -136,7 +159,7 @@ private fun GpsCard(state: RecorderUiState) {
     if (gps == null) {
       Text(if (state.recording) "測位値なし" else "—")
     } else {
-      AgeLine(gps.ageMs)
+      AgeLine(gps.ageMs, state.frozen)
       Mono("緯度 ${fmt(gps.lat, 6)}  経度 ${fmt(gps.lon, 6)}")
       Mono(
         "速度 ${gps.speedMps?.let { "${fmt(it * 3.6, 1)} km/h" } ?: "不明"}  " +
@@ -149,25 +172,146 @@ private fun GpsCard(state: RecorderUiState) {
 
 @Composable
 private fun CellCard(state: RecorderUiState) {
-  ValueCard("携帯網", state.cellStatus) {
+  val cell = state.cell
+  val status =
+    when {
+      cell == null -> if (state.recording) "応答待ち" else "未開始"
+      state.frozen -> "停止（停止時: ${cell.snapshot.status.label}）"
+      else -> cell.snapshot.status.label + (cell.snapshot.detail?.let { " $it" } ?: "")
+    }
+  ValueCard("携帯網", status) {
     state.displayInfo?.let { Mono("表示種別 $it") }
-    val cell = state.cell
-    val serving = cell?.serving
-    if (cell == null || serving == null) {
-      Text(if (state.recording) "在圏セルの情報なし" else "—")
+    if (cell == null) {
+      Text("—")
+      return@ValueCard
+    }
+    val snapshot = cell.snapshot
+    val serving = snapshot.serving
+    if (serving == null) {
+      Text(
+        if (snapshot.observedCount > 0) {
+          "在圏セルなし。周辺セルを ${snapshot.observedCount} 件観測（在圏セルとしては扱いません）"
+        } else {
+          "在圏セルなし"
+        }
+      )
     } else {
-      AgeLine(cell.ageMs)
-      Mono("${serving.rat}  Cell ID ${serving.cellId ?: "不明"}  PCI ${serving.pci ?: "不明"}")
-      Mono(
-        "RSRP ${serving.rsrpDbm?.let { "$it dBm" } ?: "不明"}  " +
-          "ARFCN ${serving.arfcn ?: "不明"}  バンド ${serving.bands ?: "不明"}"
+      cell.ageMs?.let { AgeLine(it, state.frozen) }
+      Mono("在圏 ${serving.rat}  Cell ID ${serving.cellId ?: "不明"}  PCI ${serving.pci ?: "不明"}")
+      Mono("ARFCN ${serving.arfcn ?: "不明"}  バンド ${serving.bands ?: "不明"}")
+      Mono(signalLine(serving.rat, serving.rsrpDbm, serving.metrics))
+      Text(
+        "取得経路: ${snapshot.servingSource ?: "不明"} / 観測セル ${snapshot.observedCount} 件",
+        style = MaterialTheme.typography.bodySmall,
+      )
+    }
+    if (snapshot.connectionSignals.isNotEmpty()) {
+      Text("接続中の信号（SignalStrength、セル識別なし）", style = MaterialTheme.typography.bodySmall)
+      for (signal in snapshot.connectionSignals) {
+        Mono(signalLine(signal.rat, signal.rsrpDbm, signal.metrics))
+      }
+    }
+    SwitchSummary(snapshot)
+  }
+}
+
+/** RAT-specific metric names: LTE RSRP/RSRQ/RSSNR, NR SS-RSRP/SS-RSRQ/SS-SINR. Missing = 不明. */
+private fun signalLine(rat: String, rsrpDbm: Int?, metrics: Map<String, Int>): String {
+  fun v(key: String, unit: String) = metrics[key]?.let { "$it $unit" } ?: "不明"
+  val rsrp = rsrpDbm?.let { "$it dBm" } ?: "不明"
+  return when (rat) {
+    "LTE" -> "LTE RSRP $rsrp  RSRQ ${v("lte_rsrq_db", "dB")}  RSSNR ${v("lte_rssnr_db", "dB")}"
+    "NR" -> "NR SS-RSRP $rsrp  SS-RSRQ ${v("nr_ss_rsrq_db", "dB")}  SS-SINR ${v("nr_ss_sinr_db", "dB")}"
+    else -> "$rat RSRP $rsrp"
+  }
+}
+
+@Composable
+private fun SwitchSummary(snapshot: CellSnapshot) {
+  when {
+    !snapshot.servingEverSeen ->
+      Text("在圏セルの切り替わり: 在圏セル情報を取得できず（判定できません）")
+    snapshot.switchCount == 0 ->
+      Text("在圏セルの切り替わり: 確認できた切り替わりなし（最初の在圏セルを基準にしています）")
+    else -> {
+      Text("在圏セルの切り替わり: ${snapshot.switchCount} 回（最初の在圏セルは数えません）")
+      for (change in snapshot.switchHistory.takeLast(SWITCH_HISTORY_SHOWN).asReversed()) {
+        Mono("${formatClock(change.timeUtcMs)}  ${change.from.label} → ${change.to.label}")
+      }
+    }
+  }
+  Text(
+    "Android の更新間隔の制限により、短い切り替わりは見逃すことがあります。完全なハンドオーバー記録ではありません。",
+    style = MaterialTheme.typography.bodySmall,
+  )
+}
+
+@Composable
+private fun NetworkCard(state: RecorderUiState) {
+  val net = state.network
+  val status =
+    when {
+      !state.recording && !state.frozen -> "未開始"
+      state.frozen -> "停止"
+      net == null -> if (state.networkReported) "既定ネットワークなし" else "確認中"
+      else -> if (net.validated) "インターネット接続を確認済み" else "接続未確認"
+    }
+  ValueCard("通信", status) {
+    if (net != null) {
+      Mono("経路 ${transportLabel(net.transport)}  （ネットワーク #${net.index}）")
+    }
+    if (!state.probeEnabled) {
+      Text("応答時間の計測: オフ")
+      return@ValueCard
+    }
+    val probe = state.lastProbe
+    if (probe == null) {
+      Text(if (state.recording) "応答時間: 最初の計測待ち（10 秒ごと）" else "応答時間: —")
+    } else {
+      val result =
+        when (probe.outcome) {
+          ProbeOutcome.OK -> "${probe.durationMs} ms（HTTP ${probe.httpStatus}）"
+          ProbeOutcome.HTTP_ERROR -> "HTTP ${probe.httpStatus}（${probe.durationMs} ms）"
+          ProbeOutcome.TIMEOUT -> "タイムアウト（5 秒）"
+          ProbeOutcome.ERROR -> "失敗（${probe.durationMs} ms）"
+        }
+      Mono("最新の応答時間 $result")
+      Text(
+        "成功 ${state.probeOkCount} / ${state.probeCount} 回" +
+          (probe.network?.let { "  計測時の経路 ${transportLabel(it.transport)}" } ?: "  計測時の経路 なし"),
+        style = MaterialTheme.typography.bodySmall,
       )
     }
   }
 }
 
+private fun transportLabel(transport: String): String =
+  transport.split("+").joinToString("+") {
+    when (it) {
+      "cellular" -> "携帯網"
+      "wifi" -> "Wi-Fi"
+      "vpn" -> "VPN"
+      "ethernet" -> "有線"
+      "bluetooth" -> "Bluetooth"
+      else -> "その他"
+    }
+  }
+
+private const val SWITCH_HISTORY_SHOWN = 5
+
+private fun formatClock(epochMs: Long): String =
+  java.time.Instant.ofEpochMilli(epochMs)
+    .atZone(java.time.ZoneId.systemDefault())
+    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
+
 @Composable
-private fun SensorCard(kind: MotionSensor, available: Boolean?, reading: SensorReading?, recording: Boolean) {
+private fun SensorCard(
+  kind: MotionSensor,
+  available: Boolean?,
+  reading: SensorReading?,
+  recording: Boolean,
+  frozen: Boolean,
+) {
   val status =
     when (available) {
       false -> "利用不可（未搭載）"
@@ -179,14 +323,34 @@ private fun SensorCard(kind: MotionSensor, available: Boolean?, reading: SensorR
       available == false -> Unit
       reading == null -> Text(if (recording) "値なし" else "—")
       else -> {
-        AgeLine(reading.ageMs)
+        AgeLine(reading.ageMs, frozen)
         if (kind == MotionSensor.BAROMETER) {
           Mono("${fmt(reading.values[0], 2)} hPa")
         } else {
           Mono(reading.values.take(3).joinToString("  ") { fmt(it, 3) })
         }
+        RateLine(kind, reading.rate)
       }
     }
+  }
+}
+
+/** Distinguishes what the device delivered from what was recorded after thinning. */
+@Composable
+private fun RateLine(kind: MotionSensor, rate: SensorRate) {
+  val recorded = rate.recordedHz?.let { "${fmt(it, 1)} Hz" } ?: "—"
+  val received = rate.receivedHz?.let { "${fmt(it, 1)} Hz" } ?: "—"
+  Text(
+    "記録 $recorded / 端末からの配信 $received（目安 ${fmt(kind.targetHz, 0)} Hz）",
+    style = MaterialTheme.typography.bodySmall,
+  )
+  val deliveredHz = rate.receivedHz
+  if (deliveredHz != null && deliveredHz < kind.targetHz * 0.9) {
+    Text(
+      "端末の配信が目安を下回っています（記録は配信された分のみ）",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.error,
+    )
   }
 }
 
@@ -203,13 +367,23 @@ private fun ValueCard(title: String, status: String, content: @Composable () -> 
   }
 }
 
+/**
+ * While recording, [ageMs] is live. After a stop ([frozen]) it is the age at the moment of the
+ * stop, so it is labelled as such instead of looking like a fresh "0 秒前".
+ */
 @Composable
-private fun AgeLine(ageMs: Long) {
+private fun AgeLine(ageMs: Long, frozen: Boolean) {
   val seconds = ageMs / 1000
-  if (ageMs > STALE_MS) {
-    Text("最終取得 ${seconds} 秒前（更新なし）", color = MaterialTheme.colorScheme.error)
-  } else {
-    Text("最終取得 ${seconds} 秒前", style = MaterialTheme.typography.bodySmall)
+  when {
+    frozen ->
+      Text(
+        "計測停止時の最終値（停止時点で ${seconds} 秒前に取得・以後更新なし）",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    ageMs > STALE_MS ->
+      Text("最終取得 ${seconds} 秒前（更新なし）", color = MaterialTheme.colorScheme.error)
+    else -> Text("最終取得 ${seconds} 秒前", style = MaterialTheme.typography.bodySmall)
   }
 }
 
@@ -236,6 +410,7 @@ fun MainScreenPreview() {
       onStop = {},
       onSave = {},
       onRequestPermissions = {},
+      onProbeEnabledChange = {},
     )
   }
 }

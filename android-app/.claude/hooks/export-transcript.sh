@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Stop フックから呼ばれ、現在のセッションの会話を読みやすい Markdown として logs/ に書き出す。
+# Stop フックから呼ばれ、現在のセッションの会話を読みやすい Markdown として docs/logs/ に書き出す。
 # 入力: stdin に Claude Code のフック JSON（transcript_path, session_id）
-# 出力: <リポジトリルート>/logs/<日付>_<セッションID先頭8桁>.md（毎回全体を再生成）
+# 出力: <リポジトリルート>/docs/logs/<日付>_<セッションID先頭8桁>.md（毎回全体を再生成）
 #
 # git に残すため、次のものはログに含めない:
 #   - ツールの出力（コマンド結果・ファイル内容）と思考過程
@@ -14,7 +14,7 @@ transcript=$(jq -r '.transcript_path // empty' <<<"$input")
 session=$(jq -r '.session_id // empty' <<<"$input")
 [ -n "$transcript" ] && [ -f "$transcript" ] || exit 0
 
-log_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}/../logs"
+log_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}/../docs/logs"
 mkdir -p "$log_dir"
 
 first_ts=$(jq -rn 'first(inputs | select(.timestamp) | .timestamp) // empty' "$transcript")

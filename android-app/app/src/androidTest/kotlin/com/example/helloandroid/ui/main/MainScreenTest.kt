@@ -7,8 +7,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.example.helloandroid.recording.CellReading
+import com.example.helloandroid.recording.CellSnapshot
+import com.example.helloandroid.recording.CellStatus
 import com.example.helloandroid.recording.MotionSensor
 import com.example.helloandroid.recording.RecorderUiState
+import com.example.helloandroid.recording.SensorRate
+import com.example.helloandroid.recording.SensorReading
 import org.junit.Rule
 import org.junit.Test
 
@@ -27,6 +32,7 @@ class MainScreenTest {
         onStop = { state = state.copy(recording = false) },
         onSave = {},
         onRequestPermissions = {},
+        onProbeEnabledChange = {},
       )
     }
     composeTestRule.onNodeWithText("計測開始").performClick()
@@ -47,8 +53,61 @@ class MainScreenTest {
         onStop = {},
         onSave = {},
         onRequestPermissions = {},
+        onProbeEnabledChange = {},
       )
     }
     composeTestRule.onNodeWithText("利用不可（未搭載）").assertExists()
+  }
+
+  @Test
+  fun afterStop_lastValuesAreLabelledAsStopTimeValues() {
+    composeTestRule.setContent {
+      MainScreen(
+        state =
+          RecorderUiState(
+            recording = false,
+            frozen = true,
+            sensorAvailable = mapOf(MotionSensor.ACCELEROMETER to true),
+            sensors =
+              mapOf(
+                MotionSensor.ACCELEROMETER to
+                  SensorReading(listOf(0f, 0f, 9.8f), ageMs = 0, rate = SensorRate(25.0, 20.0))
+              ),
+          ),
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("計測停止時の最終値", substring = true).assertExists()
+    composeTestRule.onNodeWithText("最終取得 0 秒前").assertDoesNotExist()
+  }
+
+  @Test
+  fun switchSummary_distinguishesNoServingInfoFromNoSwitches() {
+    var state by
+      mutableStateOf(
+        RecorderUiState(
+          recording = true,
+          cell = CellReading(CellSnapshot(CellStatus.NEIGHBORS_ONLY, observedCount = 7), null),
+        )
+      )
+    composeTestRule.setContent {
+      MainScreen(
+        state = state,
+        onStart = {},
+        onStop = {},
+        onSave = {},
+        onRequestPermissions = {},
+        onProbeEnabledChange = {},
+      )
+    }
+    composeTestRule.onNodeWithText("在圏セル情報を取得できず", substring = true).assertExists()
+
+    state =
+      state.copy(cell = CellReading(CellSnapshot(CellStatus.SERVING, servingEverSeen = true), null))
+    composeTestRule.onNodeWithText("確認できた切り替わりなし", substring = true).assertExists()
   }
 }

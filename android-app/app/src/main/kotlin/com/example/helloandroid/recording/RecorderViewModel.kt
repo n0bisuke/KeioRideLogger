@@ -13,9 +13,8 @@ import com.example.helloandroid.data.LogEvent
 import java.io.File
 import java.io.IOException
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -27,7 +26,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-data class SensorReading(val values: List<Float>, val ageMs: Long)
+data class SensorReading(val values: List<Float>, val ageMs: Long, val rate: SensorRate)
 
 data class GpsReading(
   val lat: Double,
@@ -38,10 +37,16 @@ data class GpsReading(
   val ageMs: Long,
 )
 
-data class CellReading(val serving: CellObservation?, val ageMs: Long)
+/** [ageMs] is the age of the serving cell sample, when there is one. */
+data class CellReading(val snapshot: CellSnapshot, val ageMs: Long?)
 
 data class RecorderUiState(
   val recording: Boolean = false,
+  /**
+   * True after a session stopped: readings are the last values of that session and their ages are
+   * as of the stop, not live.
+   */
+  val frozen: Boolean = false,
   val elapsedMs: Long = 0,
   val eventCount: Long = 0,
   val locationGranted: Boolean = false,
@@ -50,9 +55,15 @@ data class RecorderUiState(
   val sensors: Map<MotionSensor, SensorReading> = emptyMap(),
   val gpsStatus: String = "未開始",
   val gps: GpsReading? = null,
-  val cellStatus: String = "未開始",
   val cell: CellReading? = null,
   val displayInfo: String? = null,
+  val probeEnabled: Boolean = true,
+  val network: NetworkState? = null,
+  /** Set once the network callback has reported at least once this session. */
+  val networkReported: Boolean = false,
+  val lastProbe: ProbeResult? = null,
+  val probeCount: Int = 0,
+  val probeOkCount: Int = 0,
   val savableFileName: String? = null,
   val saved: Boolean = false,
   val message: String? = null,
@@ -78,8 +89,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   // Latest values written from callback threads, read by the UI ticker.
   @Volatile private var latestSensors: Map<MotionSensor, MotionSample> = emptyMap()
   @Volatile private var latestFix: Location? = null
-  @Volatile private var latestServing: CellObservation? = null
-  @Volatile private var servingSeenNs: Long? = null
+  @Volatile private var latestCell: CellSnapshot? = null
 
   private val sink: (LogEvent) -> Unit = { event -> writer?.write(event) }
 
@@ -98,12 +108,24 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     CellCollector(
       app,
       sink,
-      onServing = {
-        latestServing = it
-        servingSeenNs = it?.elapsedNs
-      },
+      onSnapshot = { latestCell = it },
       onDisplayInfo = { label -> _state.update { it.copy(displayInfo = label) } },
-      onStatus = { label -> _state.update { it.copy(cellStatus = label) } },
+    )
+
+  private val network =
+    NetworkCollector(
+      app,
+      sink,
+      onNetwork = { net -> _state.update { it.copy(network = net, networkReported = true) } },
+      onProbe = { result ->
+        _state.update {
+          it.copy(
+            lastProbe = result,
+            probeCount = it.probeCount + 1,
+            probeOkCount = it.probeOkCount + if (result.outcome == ProbeOutcome.OK) 1 else 0,
+          )
+        }
+      },
     )
 
   init {
@@ -123,19 +145,26 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  fun setProbeEnabled(enabled: Boolean) {
+    if (writer == null) _state.update { it.copy(probeEnabled = enabled) }
+  }
+
   fun start() {
     if (writer != null) return
     refreshPermissions()
-    val dir = File(app.filesDir, "sessions").apply { mkdirs() }
-    val name = "keio-ride-" + LocalDateTime.now().format(FILE_TIME) + ".csv"
-    val file = File(dir, name)
+    val file =
+      try {
+        SessionFiles.create(File(app.filesDir, "sessions"), LocalDateTime.now())
+      } catch (e: IOException) {
+        _state.update { it.copy(message = "記録ファイルを作成できませんでした: ${e.message}") }
+        return
+      }
     val sessionWriter = SessionWriter(file, ioScope)
     writer = sessionWriter
     lastFile = file
     latestSensors = emptyMap()
     latestFix = null
-    latestServing = null
-    servingSeenNs = null
+    latestCell = null
     startedElapsedNs = Clock.nowElapsedNs()
 
     val current = _state.value
@@ -147,19 +176,30 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         mapOf(
           "note" to
             "sdk=${Build.VERSION.SDK_INT};model=${Build.MODEL};" +
-              "location=${current.locationGranted};phone_state=${current.phoneStateGranted}"
+              "location=${current.locationGranted};phone_state=${current.phoneStateGranted};" +
+              (if (current.probeEnabled) {
+                "probe=${NetworkCollector.PROBE_URL};probe_interval_ms=${NetworkCollector.PROBE_INTERVAL_MS}"
+              } else {
+                "probe=off"
+              })
         ),
       )
     )
     _state.update {
       it.copy(
         recording = true,
+        frozen = false,
         elapsedMs = 0,
         eventCount = 0,
         sensors = emptyMap(),
         gps = null,
         cell = null,
         displayInfo = null,
+        network = null,
+        networkReported = false,
+        lastProbe = null,
+        probeCount = 0,
+        probeOkCount = 0,
         savableFileName = null,
         saved = false,
         message = null,
@@ -168,6 +208,7 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     motion.start()
     gps.start(Looper.getMainLooper())
     cell.start()
+    network.start(current.probeEnabled)
     tickerJob = viewModelScope.launch {
       while (isActive) {
         publish()
@@ -179,23 +220,27 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   /** [reason] is recorded in the CSV, e.g. "user" or "background". */
   fun stop(reason: String = "user") {
     val sessionWriter = writer ?: return
+    // Stop every source and wait for their threads first, so nothing lands after session_stop.
     motion.stop()
     gps.stop()
     cell.stop()
+    network.stop()
     tickerJob?.cancel()
     tickerJob = null
-    sink(LogEvent(Clock.nowUtcMs(), Clock.nowElapsedNs(), "session_stop", mapOf("note" to reason)))
+    publish()
     writer = null
+    motion.rateSummary().forEach(sessionWriter::write)
+    sessionWriter.write(
+      LogEvent(Clock.nowUtcMs(), Clock.nowElapsedNs(), "session_stop", mapOf("note" to reason))
+    )
+    _state.update { it.copy(recording = false, frozen = true, gpsStatus = "停止") }
     ioScope.launch {
       sessionWriter.close()
       val error = sessionWriter.error
       _state.update {
         it.copy(
-          recording = false,
           eventCount = sessionWriter.count,
           savableFileName = sessionWriter.file.name,
-          gpsStatus = "停止",
-          cellStatus = "停止",
           message =
             when {
               error != null -> "書き込みエラー: $error"
@@ -232,15 +277,19 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
   private fun publish() {
     val now = Clock.nowElapsedNs()
     val fix = latestFix
-    val serving = latestServing
-    val seen = servingSeenNs
+    val cellSnapshot = latestCell
+    val rates = motion.rates()
     _state.update {
       it.copy(
         elapsedMs = (now - startedElapsedNs) / 1_000_000,
         eventCount = writer?.count ?: it.eventCount,
         sensors =
-          latestSensors.mapValues { (_, s) ->
-            SensorReading(s.values.toList(), (now - s.elapsedNs) / 1_000_000)
+          latestSensors.mapValues { (kind, s) ->
+            SensorReading(
+              s.values.toList(),
+              (now - s.elapsedNs) / 1_000_000,
+              rates[kind] ?: SensorRate(null, null),
+            )
           },
         gps =
           fix?.let { loc ->
@@ -253,7 +302,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
               ageMs = (now - loc.elapsedRealtimeNanos) / 1_000_000,
             )
           },
-        cell = seen?.let { CellReading(serving, (now - it) / 1_000_000) },
+        cell =
+          cellSnapshot?.let { snap ->
+            CellReading(snap, snap.serving?.let { s -> (now - s.elapsedNs) / 1_000_000 })
+          },
       )
     }
   }
@@ -264,6 +316,5 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
   private companion object {
     const val UI_REFRESH_MS = 500L
-    val FILE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
   }
 }

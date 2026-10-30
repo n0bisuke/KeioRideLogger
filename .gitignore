@@ -16,6 +16,20 @@ local.properties
 # Output
 dist/
 
+# Local measurement data and device diagnostics (may contain precise location/cell data)
+keio-ride-*.csv
+*.adb-logcat
+*.bugreport.zip
+
+# Generated conversation/session logs are private working notes; keep guidance only
+docs/logs/*.md
+!docs/logs/README.md
+
+# Signing credentials
+*.jks
+*.keystore
+keystore.properties
+
 # Local secrets
 .env
 .env.*
