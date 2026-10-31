@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#fff"/>
+  <text x="640" y="91" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="40" font-weight="600">まとめ</text>
+  <text x="640" y="132" text-anchor="middle" fill="#888" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="19">電波を測るつもりが、いろいろ見えてきた。</text>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif">
+    <circle cx="130" cy="184" r="6" fill="#00aaa7"/>
+    <text x="160" y="192" fill="#555" font-size="24" font-weight="600">京王ライナーで電波を測ってみた</text>
+    <circle cx="130" cy="261" r="6" fill="#00aaa7"/>
+    <text x="160" y="269" fill="#555" font-size="24" font-weight="600">ついでのモニタリングも面白い</text>
+    <text x="194" y="299" fill="#777" font-size="18">GPS・セルの切り替わり頻度・加速度。Wi-Fiスキャンも次に試したい。</text>
+    <circle cx="130" cy="361" r="6" fill="#00aaa7"/>
+    <text x="160" y="369" fill="#555" font-size="24" font-weight="600">京王・高尾山のキャラクターがいる</text>
+    <text x="194" y="399" fill="#777" font-size="18">そこから、速度で姿が変わるオリジナルキャラクターも考えた。</text>
+    <circle cx="130" cy="453" r="6" fill="#00aaa7"/>
+    <text x="160" y="461" fill="#555" font-size="24" font-weight="600">初めての本格Kotlinアプリ開発</text>
+    <text x="194" y="491" fill="#777" font-size="18">コンテナ内、IDEなしでも形にできた。Androidネイティブで選択肢が広がる。乞うご期待！</text>
+    <circle cx="130" cy="554" r="6" fill="#00aaa7"/>
+    <text x="160" y="562" fill="#555" font-size="24" font-weight="600">みんなでログを集めて、旅のマップを作ったらおもしろそう</text>
+  </g>
+  <path d="M130 610 H1150" stroke="#ddd" stroke-width="2"/>
+  <text x="130" y="648" fill="#0F755E" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="20" font-weight="600">次は、みんなのログで旅の景色をつないでみたい。</text>
+  <text x="64" y="687" fill="#777" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="15">菅原 のびすけ · @n0bisuke</text>
+  <rect x="0" y="713" width="1280" height="7" fill="#00aaa7"/>
+</svg>

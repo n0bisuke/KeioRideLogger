@@ -432,6 +432,129 @@ const KRL = (() => {
     return best;
   }
 
+  /**
+   * Nearest point of a [lat, lon] polyline (same flat approximation): { distKm, alongKm, totalKm, cumKm }.
+   * cumKm[i] is the distance along the line to waypoint i. Used to place a schematic marker only.
+   */
+  function projectToPolyline(lat, lon, waypoints) {
+    const k = Math.PI / 180, R = 6371.0088, cosLat = Math.cos(lat * k);
+    const xy = (a, b) => [(b - lon) * k * R * cosLat, (a - lat) * k * R];
+    const cumKm = [0];
+    let best = { distKm: Infinity, alongKm: 0 };
+    for (let i = 1; i < waypoints.length; i++) {
+      const [ax, ay] = xy(...waypoints[i - 1]), [bx, by] = xy(...waypoints[i]);
+      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy, len = Math.sqrt(len2);
+      const u = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+      const d = Math.hypot(ax + u * dx, ay + u * dy);
+      if (d < best.distKm) best = { distKm: d, alongKm: cumKm[i - 1] + u * len };
+      cumKm.push(cumKm[i - 1] + len);
+    }
+    return { ...best, totalKm: cumKm[cumKm.length - 1], cumKm };
+  }
+
+  // -------------------------------------------------------------------------
+  // Tunnel hints. Three separate layers that are never merged into one verdict:
+  // (1) reference sections from public sources, (2) a fresh GPS fix near a section, and
+  // (3) "トンネルかも？" only when a GPS gap follows a near fix AND the cellular observation at the same
+  // time is missing or lower than around the approach. No absolute RSRP threshold, no snapping.
+  const TUNNEL = { FIX_FRESH_MS: 5000, LOOKBACK_MS: 5 * 60 * 1000, RECOVERED_SHOW_MS: 60000, LOW_ACC_M: 30, MAX_USABLE_ACC_M: 100, CELL_STALE_MS: 10000, REF_MS: 30000, STEP_MS: 1000 };
+  const lastIndexAt = (arr, t) => {
+    let lo = 0, hi = arr.length - 1, best = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m].t <= t) { best = m; lo = m + 1; } else hi = m - 1; }
+    return best;
+  };
+  /** Nearest auto-detect section to a fix: { section, distM, lowAcc } or null. */
+  function nearSection(sections, p) {
+    let best = null;
+    for (const sec of sections) {
+      if (!sec.autoDetect) continue;
+      const d = distanceToPolylineKm(p.lat, p.lon, sec.coords) * 1000;
+      const acc = p.acc;
+      const inside = d <= sec.toleranceM;
+      // The accuracy circle reaching into the zone counts as "near, low accuracy" (boundary case).
+      const straddle = !inside && acc !== null && acc <= TUNNEL.MAX_USABLE_ACC_M && d - acc <= sec.toleranceM;
+      if (!inside && !straddle) continue;
+      const lowAcc = straddle || acc === null || acc > TUNNEL.LOW_ACC_M || d + acc > sec.toleranceM;
+      if (!best || d < best.distM) best = { section: sec, distM: d, lowAcc };
+    }
+    return best;
+  }
+  /**
+   * State at time [t]: { gps: "none"|"fresh"|"gap", near, gapMs, approach, hint, reasons, recovered }.
+   * reasons are observation facts only; hint is true only with a cellular sign during the GPS gap.
+   */
+  function tunnelStateAt(s, t, sections) {
+    const out = { gps: "none", near: null, gapMs: null, approach: null, hint: false, reasons: [], recovered: null };
+    const i = lastIndexAt(s.gps, t);
+    if (i < 0) return out;
+    const fix = s.gps[i];
+    if (t - fix.t <= TUNNEL.FIX_FRESH_MS) {
+      out.gps = "fresh";
+      out.near = nearSection(sections, fix);
+      // Recovery: the latest gap that ended within the last minute and started next to a section.
+      for (let k = i; k > 0 && t - s.gps[k].t <= TUNNEL.RECOVERED_SHOW_MS; k--) {
+        const a = s.gps[k - 1], b = s.gps[k];
+        if (b.t - a.t <= GPS_GAP_MS) continue;
+        const n = nearSection(sections, a);
+        if (n) out.recovered = { t: b.t, gapMs: b.t - a.t, section: n.section };
+        break;
+      }
+      return out;
+    }
+    out.gps = "gap";
+    out.gapMs = t - fix.t;
+    const n = t - fix.t <= TUNNEL.LOOKBACK_MS ? nearSection(sections, fix) : null;
+    if (!n) return out;
+    out.approach = { t: fix.t, ...n };
+    out.reasons.push(`GPS 更新なし（${Math.round(out.gapMs / 1000)} 秒）`);
+    let cellSign = false;
+    const ci = lastIndexAt(s.serving, t), c = ci >= 0 ? s.serving[ci] : null;
+    if (!c || t - c.t > TUNNEL.CELL_STALE_MS) { out.reasons.push("在圏セル更新なし"); cellSign = true; }
+    else if (c.rsrp === null) { out.reasons.push("RSRP 取得なし"); cellSign = true; }
+    else {
+      // Compared with the lowest RSRP seen in the 30 s before the last near fix (relative, no threshold).
+      const ref = s.serving.filter(x => x.t >= fix.t - TUNNEL.REF_MS && x.t <= fix.t && x.rsrp !== null).map(x => x.rsrp);
+      const refMin = ref.length ? Math.min(...ref) : null;
+      if (refMin !== null && c.rsrp < refMin) { out.reasons.push(`RSRP 低下（接近時の最小 ${refMin} → ${c.rsrp} dBm）`); cellSign = true; }
+    }
+    // HTTP failures are listed as a separate fact; on their own they never make a hint.
+    const pi = lastIndexAt(s.probes, t), pr = pi >= 0 ? s.probes[pi] : null;
+    if (pr && pr.t > fix.t && pr.status !== "ok") out.reasons.push(pr.status === "timeout" ? "HTTP タイムアウト" : "HTTP 失敗");
+    out.hint = cellSign;
+    return out;
+  }
+  /**
+   * Time bands for the charts, all estimates: near = runs of near fixes; hint = times inside a GPS gap
+   * where tunnelStateAt reports a hint (sampled every second); recovery = first fix after such a gap.
+   */
+  function tunnelIntervals(s, sections) {
+    const near = [], hint = [], recovery = [];
+    let run = null;
+    for (let i = 0; i < s.gps.length; i++) {
+      const p = s.gps[i], n = nearSection(sections, p);
+      if (n && run && p.t - run.b <= GPS_GAP_MS) { run.b = p.t; run.lowAcc = run.lowAcc || n.lowAcc; }
+      else {
+        if (run) near.push(run);
+        run = n ? { a: p.t, b: p.t, section: n.section, lowAcc: n.lowAcc } : null;
+      }
+      if (i === 0) continue;
+      const a = s.gps[i - 1];
+      if (p.t - a.t <= GPS_GAP_MS || !nearSection(sections, a)) continue;
+      const end = Math.min(p.t, a.t + TUNNEL.LOOKBACK_MS);
+      let band = null;
+      for (let t = a.t + TUNNEL.FIX_FRESH_MS + 1; t < end; t += TUNNEL.STEP_MS) {
+        const on = tunnelStateAt(s, t, sections).hint;
+        if (on && !band) band = { a: t, b: t };
+        else if (on) band.b = t;
+        else if (band) { hint.push(band); band = null; }
+      }
+      if (band) hint.push(band);
+      recovery.push({ t: p.t, gapMs: p.t - a.t });
+    }
+    if (run) near.push(run);
+    return { near, hint, recovery };
+  }
+
   /** JST wall-clock helpers (the timetable is in JST regardless of the viewer's zone). */
   const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
   function jstClock(t, withSeconds = true) {
@@ -450,6 +573,7 @@ const KRL = (() => {
     parseCsv, buildCsvSession, emptySession, cellKey, nameFor, cellLabelRaw, cellDiagnosis,
     bleParseFragment, BleReassembler, bleDecode, LiveStore, merc, nearestByTime, jstClock, jstTimeOnDay,
     SPEED_BANDS, SPEED, SPEED_REASONS, SpeedClassifier, speedStateAt, spriteFrame, distanceToPolylineKm,
+    TUNNEL, nearSection, tunnelStateAt, tunnelIntervals, projectToPolyline,
   };
 })();
 

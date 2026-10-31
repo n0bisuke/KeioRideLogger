@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#fff"/>
+  <text x="96" y="83" fill="#008f91" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="21" font-weight="600">今日の問い</text>
+  <text x="96" y="157" fill="#555" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="38" font-weight="600">電車がトンネルに入ったら、</text>
+  <text x="96" y="211" fill="#555" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="38" font-weight="600">スマホの通信はどう変わる？</text>
+
+  <g transform="translate(110 300)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M28 48 Q67 8 106 48 M41 62 Q67 36 93 62" stroke="#00aaa7" stroke-width="5"/>
+    <path d="M67 58 L41 150 L93 150 Z M67 58 L67 150" stroke="#758494" stroke-width="5"/>
+    <circle cx="67" cy="58" r="5" fill="#00aaa7" stroke="none"/>
+    <text x="67" y="182" text-anchor="middle" fill="#666" stroke="none" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="17">沿線の基地局</text>
+  </g>
+  <path d="M256 386 H428" stroke="#9ba6ae" stroke-width="3" stroke-dasharray="8 9"/>
+  <path d="M416 374 L430 386 L416 398" fill="none" stroke="#00aaa7" stroke-width="4"/>
+
+  <g transform="translate(458 303)">
+    <path d="M0 42 Q0 18 24 18 H248 Q272 18 272 42 V130 H0 Z" fill="#e9ecee"/>
+    <path d="M0 71 Q35 0 70 0 H202 Q237 0 272 71" fill="#fff" stroke="#99a3ab" stroke-width="5"/>
+    <path d="M0 74 Q35 5 70 5 H202 Q237 5 272 74" fill="none" stroke="#c4ccd1" stroke-width="3" stroke-dasharray="8 7"/>
+    <path d="M30 86 Q30 70 48 70 H228 Q246 70 246 86 V121 Q246 137 228 137 H48 Q30 137 30 121 Z" fill="#2160df"/>
+    <rect x="50" y="81" width="32" height="20" rx="3" fill="#dcecff"/><rect x="93" y="81" width="32" height="20" rx="3" fill="#dcecff"/><rect x="136" y="81" width="32" height="20" rx="3" fill="#dcecff"/><rect x="179" y="81" width="32" height="20" rx="3" fill="#dcecff"/>
+    <circle cx="79" cy="138" r="10" fill="#344253"/><circle cx="201" cy="138" r="10" fill="#344253"/>
+    <text x="136" y="181" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="17">京王ライナー</text>
+  </g>
+
+  <path d="M790 386 H948" stroke="#9ba6ae" stroke-width="3" stroke-dasharray="8 9"/>
+  <path d="M936 374 L950 386 L936 398" fill="none" stroke="#00aaa7" stroke-width="4"/>
+  <g transform="translate(972 300)" fill="none" stroke="#657583" stroke-width="5" stroke-linejoin="round">
+    <rect x="0" y="10" width="185" height="127" rx="7" fill="#fff"/>
+    <path d="M-13 150 H198 L180 166 H5 Z" fill="#edf1f3"/>
+    <path d="M22 96 L55 77 L89 87 L123 52 L160 65" stroke="#00aaa7" stroke-width="5"/>
+    <circle cx="55" cy="77" r="4" fill="#00aaa7"/><circle cx="123" cy="52" r="4" fill="#00aaa7"/>
+  </g>
+  <text x="1064" y="486" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="17">観測してみる</text>
+
+  <path d="M96 548 H1184" stroke="#ddd" stroke-width="2"/>
+  <text x="96" y="591" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="21">GPSだけでは見えない在圏セル・電波・通信応答も、Androidで記録してみます。</text>
+  <text x="96" y="633" fill="#888" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="16">※この図は観測テーマのイメージです。電波状態やトンネル内の通信結果を示すものではありません。</text>
+  <rect x="0" y="713" width="1280" height="7" fill="#00aaa7"/>
+</svg>

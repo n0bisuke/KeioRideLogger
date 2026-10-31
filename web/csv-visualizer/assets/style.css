@@ -4,6 +4,17 @@
   --canvas: #0a0f14;
   --gps: #4dd0e1; --rsrp: #5fd38d; --rsrq: #c39bff; --snr: #f2c94c; --http: #4fb3ff;
   --change: #ffb347; --serving: #5fd38d; --bad: #ff6b6b; --warn: #f2c94c; --plan: #b0bec5; --memo: #ff8ad8;
+  --shade: rgba(13, 18, 24, .5); --overlay: rgba(13, 18, 24, .85); --overlay-soft: rgba(21, 28, 36, .55); --near: #b39ddb;
+  color-scheme: dark;
+}
+/* Light theme (header switch): same roles, darker strokes so lines stay readable on white. Map tiles are not recoloured. */
+:root[data-theme="light"] {
+  --bg: #f3f6f9; --panel: #ffffff; --panel2: #eaf0f5; --line: #c9d3dc; --fg: #14202b; --muted: #53616d;
+  --canvas: #f8fafc;
+  --gps: #00838f; --rsrp: #2e7d32; --rsrq: #6a3fbf; --snr: #9a6b00; --http: #1565c0;
+  --change: #c75f00; --serving: #2e7d32; --bad: #c62828; --warn: #9a6b00; --plan: #546e7a; --memo: #ad1457;
+  --shade: rgba(243, 246, 249, .65); --overlay: rgba(255, 255, 255, .92); --overlay-soft: rgba(255, 255, 255, .7); --near: #5e35b1;
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg); }
@@ -82,7 +93,7 @@ tr.clickable:hover, tr.selected { background: var(--panel2); }
 @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
 .chart { height: 180px; cursor: crosshair; }
 .chart.lane { height: 90px; }
-.route-canvas { height: 104px; margin-top: 4px; }
+.route-canvas { height: 120px; margin-top: 4px; }
 .routenote { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .markerrow { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; font-size: 13px; }
 select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font: inherit; }
@@ -99,7 +110,41 @@ dd { margin: 0; }
 .routestatus { font-size: 13px !important; padding: 1px 8px; color: var(--muted); }
 .routestatus.off { color: var(--warn); }
 .routestatus.near { color: var(--serving); }
+/* Tunnel hint: purple = near a reference section (GPS), orange = "かも？" (estimate from several signs). */
+.tunnelstatus { font-size: 13px !important; padding: 1px 8px; color: var(--muted); border-style: dashed; cursor: help; }
+.tunnelstatus.near { color: var(--near); }
+.tunnelstatus.maybe { color: var(--change); }
+#tunnelReasons { margin: 4px 0 0; }
+#tunnelInfo ul { margin: 4px 0; padding-left: 18px; }
+#tunnelInfo li { margin-bottom: 4px; }
 .routehead .markerrow { margin-top: 0; margin-left: auto; }
+/* Route legend: amber circle = timetable plan, cyan-edged square = GPS estimate (projected fix). */
+.routelegend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; color: var(--muted); }
+.routelegend i { display: inline-block; width: 11px; height: 11px; margin-left: 4px; }
+.routelegend .lg-plan { border-radius: 50%; background: #ffb347; outline: 2px dashed var(--muted); outline-offset: 1px; }
+.routelegend .lg-gps { border: 2px solid #26c6a8; background: var(--panel); }
+.routelegend #routeGps { font-size: 12px !important; }
+.route { position: relative; }
+.routewrap { position: relative; }
+.pinlegend i { display: inline-block; width: 10px; height: 10px; margin-left: 6px; }
+.lg-passed { width: 16px !important; height: 4px !important; background: #7d8a96; border-radius: 2px; vertical-align: middle; }
+.pin-lowacc { width: 0 !important; height: 0 !important; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 10px solid #f2c94c; }
+.pin-gap { border: 2.5px solid #9aa7b2; border-radius: 50%; }
+.pin-near { background: #b39ddb; transform: rotate(45deg) scale(.85); }
+.pin-hint { background: #ffb347; }
+:root[data-theme="light"] .pin-lowacc { border-bottom-color: #b38600; }
+:root[data-theme="light"] .pin-gap { border-color: #5f6b75; }
+:root[data-theme="light"] .pin-near { background: #5e35b1; }
+:root[data-theme="light"] .pin-hint { background: #d9730d; }
+.pinpop { position: absolute; z-index: 30; width: min(300px, calc(100% - 8px)); padding: 6px 26px 6px 10px; font-size: 12px; line-height: 1.45;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--http); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+.pinpop p { margin: 0 0 4px; }
+.pinpop button { position: absolute; top: 3px; right: 3px; padding: 0 6px; font-size: 13px; }
+.pinlist { margin: 4px 0; padding-left: 20px; max-height: 180px; overflow: auto; }
+.linkish { padding: 0 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.themetoggle { font-size: 12px; padding: 2px 10px; }
+.track3d { height: 360px; touch-action: none; cursor: grab; }
+@media (max-width: 600px) { .track3d { height: 280px; } }
 .routenote { font-size: 12px; color: var(--muted); }
 .routenote summary { cursor: pointer; }
 
@@ -143,6 +188,8 @@ dd { margin: 0; }
   body.dashboard-overview .route .routehead h2 { font-size: 13px; }
   body.dashboard-overview .route .route-canvas { height: 62px; margin: 0; }
   body.dashboard-overview .route .routenote { display: none; }
+  body.dashboard-overview .pinlegend { font-size: 10px; }
+  body.dashboard-overview .pinlegend .muted { display: none; }
   body.dashboard-overview .timeseries { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   body.dashboard-overview .timeseries > h2 { flex: none; margin: 0 0 2px; }
   body.dashboard-overview .timeseries .toolbar { flex: none; margin: 2px 0 4px; gap: 4px 8px; }
@@ -156,7 +203,7 @@ dd { margin: 0; }
   body.dashboard-overview .timeseries > .small { flex: none; margin: 1px 0 0; font-size: 10px; }
   body.dashboard-overview #selectionPanel, body.dashboard-overview #sensorsPanel { display: none; }
   /* The one-screen overview keeps its existing cards and charts; altitude is shown in the detail view. */
-  body.dashboard-overview #altitudePanel, body.dashboard-overview .card.altitude { display: none; }
+  body.dashboard-overview #altitudePanel, body.dashboard-overview .card.altitude, body.dashboard-overview #track3dPanel { display: none; }
 }
 body:not(.dashboard-overview) .dashboard-switch button[aria-pressed="false"] { color: var(--muted); }
 .sensors summary { cursor: pointer; list-style: revert; }
@@ -168,19 +215,31 @@ tr.future { opacity: .45; }
 
 /* Floating character: above every panel, dragged by the user, never auto-moving or blinking. */
 .floatchar { position: fixed; z-index: 40; width: 150px; display: flex; flex-direction: column; align-items: center;
-  touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; border-radius: 10px; outline: none; }
-.floatchar:hover, .floatchar:focus-visible, .floatchar.dragging { background: rgba(21, 28, 36, .55); box-shadow: 0 0 0 1px var(--line); }
+  touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; border-radius: 10px; outline: none;
+  padding-bottom: 24px; /* room for the resize grip under the caption */ }
+.floatchar:hover, .floatchar:focus-visible, .floatchar.dragging { background: var(--overlay-soft); box-shadow: 0 0 0 1px var(--line); }
 .floatchar:focus-visible { box-shadow: 0 0 0 2px var(--serving); }
 .floatchar.dragging { cursor: grabbing; }
 .floatbar { align-self: stretch; display: flex; justify-content: space-between; align-items: center; height: 22px; padding: 0 2px 0 6px; }
 .floatbar .grip { color: var(--muted); font-size: 12px; letter-spacing: -2px; }
-.floatbar button { padding: 0 7px; line-height: 18px; font-size: 14px; background: rgba(29, 38, 48, .9); }
+.floatbar button { padding: 0 7px; line-height: 18px; font-size: 14px; background: var(--panel2); }
 .floatsprite { width: 120px; height: 120px; image-rendering: pixelated; pointer-events: none; }
 .floatcap { max-width: 150px; text-align: center; font-size: 12px; line-height: 1.35; padding: 3px 6px; border-radius: 6px;
-  background: rgba(13, 18, 24, .85); border: 1px solid var(--line); }
+  background: var(--overlay); border: 1px solid var(--line); }
 .floatcap b { display: block; font-size: 13px; }
 .floatcap span { display: block; }
 .floatcap .floatnote { color: var(--muted); font-size: 10.5px; }
+/* User-sized window (lower-left grip): the sprite takes the free height; text keeps its size and stays readable. */
+.floatchar.sized { justify-content: flex-start; }
+.floatchar.sized, .floatchar.sized:hover { background: var(--overlay-soft); box-shadow: 0 0 0 1px var(--line); }
+.floatchar.sized .floatsprite { flex: 1 1 0; width: 100%; height: auto; min-height: 48px; }
+.floatchar.sized .floatcap { flex: none; max-width: 100%; align-self: stretch; margin: 0 4px; }
+.floatchar.sized .floatcap .floatnote { display: block; }
+.floatchar.resizing { cursor: nesw-resize; }
+.floatgrip { position: absolute; left: 0; bottom: 0; width: 22px; height: 22px; cursor: nesw-resize; touch-action: none; border-radius: 0 6px 0 10px;
+  background: linear-gradient(45deg, transparent 0 30%, var(--muted) 30% 38%, transparent 38% 52%, var(--muted) 52% 60%, transparent 60% 74%, var(--muted) 74% 82%, transparent 82%) var(--panel2);
+  border: 1px solid var(--line); opacity: .9; }
+.floatgrip:hover, .floatgrip:focus-visible, .floatchar.resizing .floatgrip { opacity: 1; border-color: var(--http); outline: none; box-shadow: 0 0 0 2px var(--http); }
 .floatshow { position: fixed; z-index: 40; right: 12px; bottom: 12px; font-size: 12px; padding: 4px 10px; opacity: .9; }
 @media (max-width: 600px) {
   .floatchar { width: 104px; }

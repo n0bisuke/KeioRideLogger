@@ -9,8 +9,9 @@ window.KRL_DEMO_DATA = (() => {
     "nr_csi_sinr_db", "registered", "age_ms", "transport", "validated", "http_status", "duration_ms", "note",
   ];
 
-  function createCsv({ debug = false } = {}) {
-    const start = Date.parse("2025-04-26T11:00:00+09:00"), rows = [];
+  /** Row collector: add(seconds from [startIso], event, values); toCsv() sorts by time and quotes every field. */
+  function rowBuilder(startIso) {
+    const start = Date.parse(startIso), rows = [];
     const add = (sec, event, values = {}) => {
       const row = Object.fromEntries(columns.map(key => [key, ""]));
       Object.assign(row, values, {
@@ -19,6 +20,17 @@ window.KRL_DEMO_DATA = (() => {
       });
       rows.push(row);
     };
+    const toCsv = () => {
+      rows.sort((a, b) => Date.parse(a.time_utc) - Date.parse(b.time_utc));
+      const quote = value => `"${String(value).replace(/"/g, '""')}"`;
+      return [columns.join(","), ...rows.map(row => columns.map(key => quote(row[key])).join(","))].join("\n");
+    };
+    return { add, toCsv };
+  }
+
+  function createCsv({ debug = false, scenario = null } = {}) {
+    if (debug && scenario === "tunnel") return createTunnelCsv();
+    const { add, toCsv } = rowBuilder("2025-04-26T11:00:00+09:00");
 
     add(0, "session_start", { note: "demo=true;synthetic=true;location=false;phone_state=false" });
     [["accel", 50000, 20], ["gyro", 50000, 20], ["mag", 200000, 5], ["pressure", 1000000, 1]].forEach(([kind, period, hz], i) => {
@@ -95,9 +107,77 @@ window.KRL_DEMO_DATA = (() => {
     for (let i = 0; i < 3; i++) add(i * 20 + 2, "display_info", { status: "available", note: "demo=true" });
     add(50.9, "session_stop", { note: "demo=true" });
 
-    rows.sort((a, b) => Date.parse(a.time_utc) - Date.parse(b.time_utc));
-    const quote = value => `"${String(value).replace(/"/g, '""')}"`;
-    return [columns.join(","), ...rows.map(row => columns.map(key => quote(row[key])).join(","))].join("\n");
+    return toCsv();
+  }
+
+  /**
+   * /keio-mttakao3/#debug only: a fictional train-speed pass by the Chofu underground reference section.
+   * The track joins public station points with made-up offsets (not a recording). Story: approach
+   * (fresh GPS) -> near the section, accuracy drops -> GPS gap with RSRP lower, serving cell missing and
+   * an HTTP timeout -> GPS gap while the cell is observed normally again -> GPS fix again (recovery).
+   */
+  function createTunnelCsv() {
+    const { add, toCsv } = rowBuilder("2025-04-26T11:13:00+09:00");
+    add(0, "session_start", { note: "demo=true;synthetic=true;scenario=tunnel" });
+    [["accel", 50000, 20], ["pressure", 1000000, 1]].forEach(([kind, period, hz], i) => {
+      add(.01 + i * .01, "sensor_status", { status: "registered", note: `${kind};name=synthetic;requested_period_us=${period}` });
+      add(.05 + i * .01, "sensor_rate", { status: "measured", note: `sensor=${kind};recorded_hz=${hz}` });
+    });
+    add(.02, "gps_status", { status: "active" });
+    add(.03, "cell_status", { status: "registered" });
+    add(.04, "network", { status: "available", transport: "cellular", validated: "true" });
+
+    // [sec, lat, lon] keyframes; no GPS between 110 s and 290 s.
+    const legs = [
+      [0, 35.6560, 139.5800], [76, 35.65417, 139.56667], [110, 35.6516, 139.5613],
+      [290, 35.6578, 139.5280], [380, 35.6610, 139.5130],
+    ];
+    const at = sec => {
+      const k = legs.findIndex(([t], i) => i + 1 < legs.length && sec >= t && sec <= legs[i + 1][0]);
+      const [t0, a0, o0] = legs[k], [t1, a1, o1] = legs[k + 1], u = (sec - t0) / (t1 - t0);
+      return [a0 + (a1 - a0) * u, o0 + (o1 - o0) * u];
+    };
+    for (let sec = 0; sec <= 380; sec++) {
+      if (sec > 110 && sec < 290) continue;
+      const [lat, lon] = at(sec);
+      const acc = sec >= 100 && sec <= 110 ? 45 : sec >= 290 && sec < 296 ? 18 : 4 + Math.abs(Math.sin(sec));
+      add(sec + .1, "gps", {
+        lat: lat.toFixed(6), lon: lon.toFixed(6), speed_mps: (16.2 + .8 * Math.sin(sec / 9)).toFixed(3),
+        // A short blank altitude stretch (330-332 s) keeps the missing-value view checkable here too.
+        altitude_m: sec >= 330 && sec <= 332 ? "" : (44 + 3 * Math.sin(sec / 60)).toFixed(1), h_accuracy_m: acc.toFixed(1), provider: "demo",
+      });
+    }
+
+    const cell = k => ({ rat: "LTE", cell_id: `DEMO-CELL-${k}`, pci: { A: "101", B: "202", C: "303" }[k], tac: "DEMO", arfcn: "1500", bands: "DEMO" });
+    add(.2, "cell_change", { ...cell("A"), status: "baseline", note: "src=listener;switch_count=0;demo=true" });
+    add(176, "cell_change", { ...cell("B"), status: "switched", note: "src=listener;prev=LTE/DEMO-CELL-A/101/1500;demo=true" });
+    add(300, "cell_change", { ...cell("C"), status: "switched", note: "src=listener;prev=LTE/DEMO-CELL-B/202/1500;demo=true" });
+    for (let sec = 0; sec <= 380; sec++) {
+      if (sec > 150 && sec < 175) {
+        // No serving cell reported for 25 s (only a neighbour row): "在圏セル更新なし".
+        add(sec + .3, "cell", { ...cell("A"), cell_id: "DEMO-NEIGHBOR", registered: "false", rsrp_dbm: "-110", note: "src=listener;demo=true" });
+        continue;
+      }
+      let rsrp = -84 + 2 * Math.sin(sec / 7), rsrq = -10 + Math.sin(sec / 11), snr = 12 + 2 * Math.sin(sec / 13);
+      if (sec > 110 && sec <= 150) { const u = (sec - 110) / 40; rsrp = -86 - 16 * u; rsrq = -11 - 5 * u; snr = 10 - 8 * u; }
+      else if (sec >= 175 && sec < 200) { rsrp = -95; rsrq = -14; snr = 4; }
+      add(sec + .3, "cell", {
+        ...cell(sec < 176 ? "A" : sec < 300 ? "B" : "C"), registered: "true",
+        rsrp_dbm: rsrp.toFixed(0), lte_rsrq_db: rsrq.toFixed(0), lte_rssnr_db: snr.toFixed(0),
+        lte_rssi_dbm: "DEMO", lte_cqi: "DEMO", note: "src=listener;demo=true",
+      });
+    }
+    [[20, "ok", 410], [60, "ok", 455], [100, "ok", 520], [160, "timeout", 5000], [220, "ok", 690], [320, "ok", 430], [360, "ok", 400]]
+      .forEach(([sec, status, ms]) => add(sec, "http_probe", {
+        status, duration_ms: String(ms), http_status: status === "ok" ? "204" : "", transport: "cellular",
+      }));
+    for (let i = 0; i < 380 * 20; i++) {
+      const p = i * .17;
+      add(i / 20, "accel", { x: (.15 * Math.sin(p) + .02).toFixed(3), y: (.1 * Math.cos(p * .6)).toFixed(3), z: (9.8 + .2 * Math.sin(p * .7)).toFixed(3), accuracy: "3" });
+    }
+    for (let i = 0; i < 380; i++) add(i + .002, "pressure", { pressure_hpa: (1010.4 + .05 * Math.sin(i * .05)).toFixed(2) });
+    add(381, "session_stop", { note: "demo=true" });
+    return toCsv();
   }
 
   return { createCsv };

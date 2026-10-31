@@ -41,6 +41,23 @@ const KRLApp = (() => {
   const fmtElapsed = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 3600)}:${pad2(Math.floor(s / 60) % 60)}:${pad2(s % 60)}`; };
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+  // Theme: dark (default) or light. Only the choice is stored; no measurement data.
+  const THEME_KEY = "krl.theme.v1";
+  const isLight = () => document.documentElement.dataset.theme === "light";
+  function loadTheme() {
+    try { return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"; } catch (_) { return "dark"; }
+  }
+  function setTheme(theme, save) {
+    document.documentElement.dataset.theme = theme;
+    const b = $("themeToggle");
+    if (b) {
+      b.textContent = theme === "light" ? "ダーク表示" : "ライト表示";
+      b.setAttribute("aria-pressed", String(theme === "light"));
+      b.setAttribute("aria-label", theme === "light" ? "ダーク表示に切り替え" : "ライト表示に切り替え");
+    }
+    if (save) try { localStorage.setItem(THEME_KEY, theme); } catch (_) { /* not saved */ }
+  }
+
   const session = () => (st.view === "csv" ? st.csv : st.view === "ble" ? st.live.session : null);
   function windowRange() {
     const s = session();
@@ -87,6 +104,7 @@ const KRLApp = (() => {
       <button id="overviewMode" class="active" type="button" aria-pressed="true">一覧</button>
       <button id="detailMode" type="button" aria-pressed="false">詳細</button>
     </span>
+    <button id="themeToggle" type="button" class="themetoggle" aria-pressed="false" title="画面の配色を切り替えます（配色だけを保存します）">ライト表示</button>
     <span class="clock" id="clock">--:--:-- JST</span>
     ${other}
   </div>
@@ -112,9 +130,16 @@ const KRLApp = (() => {
   ${cfg.route ? `<section class="panel route" aria-labelledby="h-route">
     <div class="routehead"><h2 id="h-route">走行ルートと時刻表 <span class="tag">概略・縮尺なし・時刻は公式時刻表の予定</span></h2>
       <span class="chip routestatus" id="routeStatus">GPS 位置なし</span>
+      <span class="routelegend small"><i class="lg-plan" aria-hidden="true"></i>予定位置（時刻表）<i class="lg-gps" aria-hidden="true"></i>GPS 推定位置: <span id="routeGps" class="nodata">表示なし</span><i class="lg-passed" aria-hidden="true"></i>通過済み（GPS）</span>
+      <span class="routelegend small pinlegend"><i class="pin-lowacc" aria-hidden="true"></i>GPS精度低下<i class="pin-gap" aria-hidden="true"></i>GPS更新なし<i class="pin-near" aria-hidden="true"></i>トンネル区間付近<i class="pin-hint" aria-hidden="true"></i>トンネルかも？<span class="muted">（ピンをクリックで詳細）</span></span>
+      ${tunnels().length ? `<span class="chip tunnelstatus" id="tunnelStatus" role="status">判定材料なし</span>` : ""}
       <span class="markerrow"><label>実測メモ <select id="markerLabel">${cfg.route.memoLabels.map(l => `<option>${esc(l)}</option>`).join("")}</select></label><button id="addMarker" type="button">選択中の時刻に追加</button><span id="markerList" class="muted small"></span></span></div>
-    <canvas id="routeCanvas" class="route-canvas" aria-label="ルート概略図"></canvas>
-    <details class="routenote"><summary>この図について</summary><span id="routeNote"></span></details></section>` : ""}
+    <div class="routewrap"><canvas id="routeCanvas" class="route-canvas" aria-label="ルート概略図。観測イベントのピンの一覧は下の「観測イベントの一覧」にあります"></canvas>
+      <div class="pinpop hidden" id="pinPop" role="dialog" aria-label="観測イベントの詳細"><button type="button" id="pinPopClose" aria-label="閉じる">×</button><div id="pinPopBody"></div></div></div>
+    ${tunnels().length ? `<p class="routenote" id="tunnelReasons"></p>` : ""}
+    <details class="routenote"><summary>この図について</summary><span id="routeNote"></span></details>
+    <details class="routenote" id="pinListBox"><summary>観測イベントの一覧（<span id="pinCount">0</span> 件・新しい順）</summary><ol id="pinList" class="pinlist"></ol></details>
+    ${tunnels().length ? `<details class="routenote" id="tunnelInfo"><summary>トンネル・地下化区間のデータ（資料・概略）</summary>${tunnelInfoHtml()}</details>` : ""}</section>` : ""}
   <div class="grid">
     <section class="panel mappanel" aria-labelledby="h-map">
       <h2 id="h-map">GPS軌跡・概略 <span class="tag" id="mapTag">背景: OpenStreetMap</span></h2>
@@ -129,6 +154,7 @@ const KRLApp = (() => {
         <div class="maperror hidden" id="mapError">地図タイルを取得できません。軌跡は表示を続けます。</div>
       </div>
       <p class="legend">太線＝連続した測位（5 秒を超える欠測はつなぎません）・● 精度 ${LOW_ACC_M} m 以内・○ 低精度・◎ 最新位置（灰色は古い位置）・◆ 接続アンテナエリアの変化（推定）・× HTTP 失敗。GPS の座標そのままで、道路や線路への補正はしていません。</p>
+      ${tunnels().length ? `<p class="legend">紫の帯＝地下化区間（資料・駅を結んだ概略）・茶の破線＝高尾第一トンネルを含む駅間（トンネル位置は未設定）。どちらもこのアプリが地図の上に重ねている参考表示で、OpenStreetMap の地図記号（細い鉄道線など）ではありません。地下区間の正確な坑口位置や現在の GPS 位置を示すものでもありません。</p>` : ""}
     </section>
     <section class="side" aria-label="現在のネットワーク指標">
       <div class="panel character"><canvas id="charCanvas" class="sprite" aria-label="速度キャラクター"></canvas>
@@ -167,7 +193,17 @@ const KRLApp = (() => {
       <div><h3>HTTP 応答時間 [ms]（DNS・TCP・TLS・HTTP を含む総所要時間）</h3><canvas id="chHttp" class="chart"></canvas><p class="small muted">● 成功　▲ HTTP エラー　× タイムアウト・失敗</p></div>
     </div>
     <h3>セル変更の時系列</h3><canvas id="chLane" class="chart lane"></canvas>
-    <p class="small muted">◆ 接続アンテナエリアの変化（推定、縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。</p>
+    <p class="small muted">◆ 接続アンテナエリアの変化（推定、縦の破線）　○ 基準（最初の在圏セル、数えない）${cfg.route ? "　点線＝時刻表の予定（公式掲載時刻）　実線＝実測メモ" : ""}。値のない区間は線でつながず、0 で埋めません。${tunnels().length ? "<br>電波・HTTP・セル変更のグラフの薄い紫＝トンネル区間付近（GPS 位置からの推定）・薄い橙＝トンネルかも？（GPS 欠測中に携帯網の観測が途切れた・低下した時間の推定）・緑の点線＝GPS 測位復帰。いずれも推定の境界で、実測の入口・出口ではありません。" : ""}</p>
+  </section>
+  <section class="panel track3d-panel" id="track3dPanel" aria-labelledby="h-3d">
+    <h2 id="h-3d">GPS 軌跡の 3D 表示 <span class="tag">緯度・経度・GPS 高度・地形ではありません</span></h2>
+    <div class="toolbar">
+      <label>高さの強調 <select id="t3dExag"><option value="1">×1（実寸）</option><option value="3">×3</option><option value="10" selected>×10</option><option value="30">×30</option></select></label>
+      <button id="t3dReset" type="button">向きを戻す</button>
+      <span class="muted" id="t3dStatus"></span>
+    </div>
+    <canvas id="track3d" class="track3d" tabindex="0" aria-label="GPS 軌跡の 3D 表示。ドラッグまたは矢印キーで回転できます"></canvas>
+    <p class="small muted">CSV の緯度・経度と <code>altitude_m</code>（GPS 高度）だけで軌跡を立体的に描きます。地形・建物・標高データは描かず、外部のデータも取得しません。高さは見やすさのため強調しています（初期値 ×10）。GPS の高さは水平位置より誤差が大きく、測量の標高ではありません。高度が空欄の点は描かず、空欄や 5 秒を超える欠測の前後は線でつなぎません。下の格子は「この区間で最も低い GPS 高度」の平面で、地面ではありません。ドラッグ（またはフォーカスして矢印キー）で回転、点をクリックするとその時刻を選びます。再生位置より後の軌跡は薄く表示します。</p>
   </section>
   <section class="panel altitude-panel" id="altitudePanel" aria-label="GPS 高度">
     <h2>GPS 高度 [m]</h2>
@@ -190,6 +226,9 @@ const KRLApp = (() => {
   <canvas id="floatCanvas" class="floatsprite" aria-hidden="true"></canvas>
   <div class="floatcap"><b id="floatLabel">—</b><span id="floatSub"></span>
     <span class="floatnote">GPS 推定速度に応じた演出で、乗り物の判定ではありません</span></div>
+  <div class="floatgrip" id="floatGrip" role="button" tabindex="0" aria-describedby="floatGripHelp"
+    aria-label="キャラクターの大きさを変える" title="ドラッグで大きさを変更（ダブルクリックで元の大きさ）"></div>
+  <span id="floatGripHelp" class="hidden">左下のつまみをドラッグして幅と高さを変えます。右上の角は動きません。フォーカスして矢印キーでも変えられます（左右で幅、上下で高さ、Shift で大きく）。ダブルクリックか Enter で元の大きさに戻ります。</span>
 </div>
 <button id="floatShow" class="floatshow hidden" type="button" aria-label="キャラクターを表示">キャラクターを表示</button>`;
   }
@@ -343,32 +382,47 @@ const KRLApp = (() => {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Floating character: dragged anywhere by the user, kept inside the viewport. Only its position
-  // and shown/hidden state go to localStorage (shared by both pages); no GPS/CSV/BLE data.
+  // Floating character: dragged anywhere and resized from its lower-left grip by the user, kept inside
+  // the viewport. Only its position, size and shown/hidden state go to localStorage (shared by both
+  // pages); no GPS/CSV/BLE data.
   const FLOAT_KEY = "krl.floatingCharacter.v1";
-  const float = { hidden: false, x: null, y: null, drag: null };
+  // custom: the user placed it (or a position was restored); otherwise it follows the default spot.
+  // w/h: user size in CSS px (null = the CSS default size).
+  const float = { hidden: false, x: null, y: null, drag: null, custom: false, w: null, h: null, resize: null };
+  const FLOAT_MIN = { w: 120, h: 170 }, FLOAT_MAX = { w: 640, h: 760 };
   function loadFloat() {
     try {
       const v = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
       if (v && typeof v === "object") {
         float.hidden = v.hidden === true;
-        if (Number.isFinite(v.x) && Number.isFinite(v.y)) { float.x = v.x; float.y = v.y; }
+        if (Number.isFinite(v.w) && Number.isFinite(v.h)) { float.w = v.w; float.h = v.h; }
+        if (Number.isFinite(v.x) && Number.isFinite(v.y)) { float.x = v.x; float.y = v.y; float.custom = true; }
       }
     } catch (_) { /* unavailable or corrupt storage: use the defaults */ }
   }
   function saveFloat() {
-    try { localStorage.setItem(FLOAT_KEY, JSON.stringify({ x: float.x, y: float.y, hidden: float.hidden })); } catch (_) { /* not saved */ }
+    // The default spot is not stored, so it keeps following the layout until the user moves the box.
+    const pos = float.custom ? { x: float.x, y: float.y } : { x: null, y: null };
+    try { localStorage.setItem(FLOAT_KEY, JSON.stringify({ ...pos, w: float.w, h: float.h, hidden: float.hidden })); } catch (_) { /* not saved */ }
   }
   /** Size of the floating box; CSS sizes as a fallback when layout is unavailable. */
   function floatSize() {
     const el = $("floatChar");
-    return { w: el.offsetWidth || 150, h: el.offsetHeight || 190 };
+    return { w: el.offsetWidth || float.w || 150, h: el.offsetHeight || float.h || 190 };
   }
-  /** Places the box at (x, y), clamped so it stays fully inside the viewport; null = bottom right. */
+  /**
+   * Places the box at (x, y), clamped so it stays fully inside the viewport. null = the default spot:
+   * the lower-left corner of the map (scale bar is top-left, attribution bottom-right) when the map is
+   * on screen and large enough, else the bottom right of the window.
+   */
   function placeFloat(x, y) {
     const el = $("floatChar"), { w, h } = floatSize(), m = 8;
     const vw = window.innerWidth || document.documentElement.clientWidth, vh = window.innerHeight || document.documentElement.clientHeight;
-    if (x === null || y === null) { x = vw - w - 16; y = vh - h - 16; }
+    if (x === null || y === null) {
+      const r = $("map") ? $("map").getBoundingClientRect() : null;
+      if (r && r.width > w * 2.5 && r.height > h + 24 && r.bottom <= vh && r.top >= 0) { x = r.left + 12; y = r.bottom - h - 12; }
+      else { x = vw - w - 16; y = vh - h - 16; }
+    }
     float.x = Math.round(Math.max(m, Math.min(x, vw - w - m)));
     float.y = Math.round(Math.max(m, Math.min(y, vh - h - m)));
     el.style.left = `${float.x}px`; el.style.top = `${float.y}px`;
@@ -377,16 +431,83 @@ const KRLApp = (() => {
     float.hidden = !show;
     $("floatChar").classList.toggle("hidden", !show);
     $("floatShow").classList.toggle("hidden", show);
-    if (show) placeFloat(float.x, float.y);
+    if (show) placeFloat(float.custom ? float.x : null, float.custom ? float.y : null);
     saveFloat();
     renderCharacter();
+  }
+  /**
+   * Applies a user size (null = CSS default), limited to [FLOAT_MIN, FLOAT_MAX] and to the viewport
+   * (8 px margin each side, so narrow screens get a smaller maximum). [right] keeps the top-right corner.
+   */
+  function sizeFloat(w, h, right = null) {
+    const el = $("floatChar");
+    const vw = window.innerWidth || document.documentElement.clientWidth, vh = window.innerHeight || document.documentElement.clientHeight;
+    if (w === null || h === null) { float.w = float.h = null; }
+    else {
+      const maxW = Math.max(FLOAT_MIN.w, Math.min(FLOAT_MAX.w, vw - 16)), maxH = Math.max(FLOAT_MIN.h, Math.min(FLOAT_MAX.h, vh - 16));
+      float.w = Math.round(Math.max(FLOAT_MIN.w, Math.min(w, maxW)));
+      float.h = Math.round(Math.max(FLOAT_MIN.h, Math.min(h, maxH)));
+    }
+    el.classList.toggle("sized", float.w !== null);
+    el.style.width = float.w !== null ? `${float.w}px` : "";
+    el.style.height = float.h !== null ? `${float.h}px` : "";
+    if (right !== null && float.x !== null) placeFloat(right - floatSize().w, float.y);
+    renderCharacter();
+  }
+  /**
+   * Lower-left grip: dragging it changes width and height while the top-right corner stays put (like a
+   * window corner). Its own pointer capture and stopPropagation keep the window drag, map and charts out.
+   */
+  function wireFloatGrip() {
+    const g = $("floatGrip");
+    g.addEventListener("pointerdown", e => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const { w, h } = floatSize();
+      if (float.x === null) placeFloat(null, null);
+      float.resize = { id: e.pointerId, x: e.clientX, y: e.clientY, w, h, right: float.x + w };
+      $("floatChar").classList.add("resizing");
+      if (g.setPointerCapture) try { g.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    });
+    g.addEventListener("pointermove", e => {
+      const r = float.resize;
+      if (!r || e.pointerId !== r.id) return;
+      e.preventDefault(); e.stopPropagation();
+      sizeFloat(r.w + (r.x - e.clientX), r.h + (e.clientY - r.y), r.right);
+      float.custom = true;
+    });
+    const end = e => {
+      if (!float.resize || e.pointerId !== float.resize.id) return;
+      e.stopPropagation();
+      float.resize = null;
+      $("floatChar").classList.remove("resizing");
+      saveFloat();
+    };
+    g.addEventListener("pointerup", end);
+    g.addEventListener("pointercancel", end);
+    const reset = () => { const { w } = floatSize(), right = float.x + w; sizeFloat(null, null, right); saveFloat(); };
+    g.addEventListener("dblclick", e => { e.stopPropagation(); reset(); });
+    // Keys: Left/Right = wider/narrower (the left edge moves), Up/Down = shorter/taller, Shift = x5, Enter = reset.
+    g.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); reset(); return; }
+      const d = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!d) return;
+      e.preventDefault(); e.stopPropagation();
+      const step = e.shiftKey ? 50 : 10, { w, h } = floatSize();
+      if (float.x === null) placeFloat(null, null);
+      sizeFloat(w + d[0] * step, h + d[1] * step, float.x + w);
+      float.custom = true;
+      saveFloat();
+    });
   }
   function wireFloat() {
     const el = $("floatChar");
     loadFloat();
+    sizeFloat(float.w, float.h);
+    wireFloatGrip();
     el.classList.toggle("hidden", float.hidden);
     $("floatShow").classList.toggle("hidden", !float.hidden);
-    if (!float.hidden) placeFloat(float.x, float.y);
+    if (!float.hidden) placeFloat(float.custom ? float.x : null, float.custom ? float.y : null);
     $("floatHide").addEventListener("click", () => { showFloat(false); $("floatShow").focus(); });
     $("floatShow").addEventListener("click", () => { showFloat(true); el.focus(); });
     // Pointer Events cover mouse, touch and pen. Capturing the pointer and stopping propagation keeps
@@ -402,6 +523,7 @@ const KRLApp = (() => {
       if (!float.drag || e.pointerId !== float.drag.id) return;
       e.preventDefault(); e.stopPropagation();
       placeFloat(e.clientX - float.drag.dx, e.clientY - float.drag.dy);
+      float.custom = true;
     });
     const end = e => {
       if (!float.drag || e.pointerId !== float.drag.id) return;
@@ -420,9 +542,13 @@ const KRLApp = (() => {
       e.preventDefault(); e.stopPropagation();
       const step = e.shiftKey ? 50 : 10;
       placeFloat(float.x + d[0] * step, float.y + d[1] * step);
+      float.custom = true;
       saveFloat();
     });
-    window.addEventListener("resize", () => { if (!float.hidden) placeFloat(float.x, float.y); });
+    window.addEventListener("resize", () => {
+      if (float.w !== null) sizeFloat(float.w, float.h);
+      if (!float.hidden) placeFloat(float.custom ? float.x : null, float.custom ? float.y : null);
+    });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -537,8 +663,11 @@ const KRLApp = (() => {
     }
     if (!st.map.view || (st.view === "ble" && !st.map.userMoved)) fitMap(pts);
     if (mapOn && drawTiles(ctx, w, h)) $("mapError").classList.remove("hidden");
+    drawSections(ctx, w, h, mapOn || isLight());
     // Casing makes the line readable on light tiles and on the dark no-map background.
-    const core = mapOn ? "#c2185b" : "#4dd0e1", casing = mapOn ? "#ffffff" : "#0b1015", edge = mapOn ? "#3a0020" : "#e6eaee";
+    // Light ground (map tiles, or the light theme without tiles) uses the dark-on-light stroke set.
+    const lightBg = mapOn || isLight();
+    const core = mapOn ? "#c2185b" : lightBg ? "#00838f" : "#4dd0e1", casing = lightBg ? "#ffffff" : "#0b1015", edge = mapOn ? "#3a0020" : lightBg ? "#004d55" : "#e6eaee";
     const lowAcc = p => p.acc === null || p.acc > LOW_ACC_M;
     if ($("showAcc").checked) {
       for (const p of pts) {
@@ -547,7 +676,7 @@ const KRLApp = (() => {
         if (r < 1.5 || r > 4000) continue;
         const [x, y] = toScreen(p, w, h);
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = mapOn ? "rgba(194,24,91,0.10)" : "rgba(77,208,225,0.10)"; ctx.fill();
+        ctx.fillStyle = mapOn ? "rgba(194,24,91,0.10)" : lightBg ? "rgba(0,131,143,0.10)" : "rgba(77,208,225,0.10)"; ctx.fill();
       }
     }
     // CSV replay: the whole track stays faint, the part up to the cursor is emphasised, and the
@@ -605,17 +734,17 @@ const KRLApp = (() => {
       const p = K.nearestByTime(s.gps, st.selectedT, K.NEAR_MS);
       if (p && inWin(p.t)) {
         const [x, y] = toScreen(p, w, h);
-        ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.lineWidth = 2.5; ctx.strokeStyle = mapOn ? "#000" : "#fff"; ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.lineWidth = 2.5; ctx.strokeStyle = lightBg ? "#000" : "#fff"; ctx.stroke();
       }
     }
     // Scale bar (top-left, away from the attribution).
     const mpp = K.merc.metersPerPx0((last ?? pts[pts.length - 1]).lat) / st.map.view.scale;
     const nice = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
     const m = nice.find(v => v / mpp >= 70) || nice[nice.length - 1];
-    ctx.fillStyle = mapOn ? "rgba(255,255,255,.85)" : "rgba(0,0,0,.5)"; ctx.fillRect(6, 6, m / mpp + 16, 30);
-    ctx.strokeStyle = mapOn ? "#222" : "#eee"; ctx.lineWidth = 2;
+    ctx.fillStyle = lightBg ? "rgba(255,255,255,.85)" : "rgba(0,0,0,.5)"; ctx.fillRect(6, 6, m / mpp + 16, 30);
+    ctx.strokeStyle = lightBg ? "#222" : "#eee"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(14, 28); ctx.lineTo(14 + m / mpp, 28); ctx.stroke();
-    ctx.fillStyle = mapOn ? "#222" : "#eee"; ctx.font = "12px system-ui"; ctx.fillText(m >= 1000 ? `${m / 1000} km` : `${m} m`, 14, 22);
+    ctx.fillStyle = lightBg ? "#222" : "#eee"; ctx.font = "12px system-ui"; ctx.fillText(m >= 1000 ? `${m / 1000} km` : `${m} m`, 14, 22);
     $("mapStatus").textContent = !last ? "この時刻までに測位なし"
       : lastStale ? (cursor !== null ? "再生位置の時点で GPS 更新なし（灰色は最後の位置）" : "最新位置は古い値です（灰色）")
       : cursor !== null ? "薄い線は再生位置より後の軌跡" : "";
@@ -685,7 +814,7 @@ const KRLApp = (() => {
   function shadeFuture(ctx, w, h, sc) {
     if (st.view !== "csv" || st.selectedT === null || !inWin(st.selectedT)) return;
     const x = sc.sx(st.selectedT);
-    ctx.fillStyle = "rgba(13,18,24,0.5)";
+    ctx.fillStyle = css("--shade");
     ctx.fillRect(x + 1, PAD.t, w - PAD.r - x - 1, h - PAD.t - PAD.b);
   }
   function mark(ctx, kind, x, y, color) {
@@ -708,6 +837,7 @@ const KRLApp = (() => {
     const pad = (yMax - yMin) * 0.1; yMin -= pad; yMax += pad;
     const sc = scales(w, h, yMin, yMax);
     axes(ctx, w, h, sc, yMin, yMax, unit);
+    if (TUNNEL_CHARTS.has(id)) tunnelBands(ctx, w, h, sc);
     verticals(ctx, w, h, sc);
     // Dense series (20 Hz sensors) are drawn as a per-pixel min/max envelope; the data is untouched.
     vis = vis.map(se => (se.downsample && se.pts.length > 2 * w ? { ...se, pts: envelope(se.pts, sc) } : se));
@@ -798,6 +928,7 @@ const KRLApp = (() => {
     if (!s) return emptyNote(ctx, w, h, "データ未読み込み");
     const sc = scales(w, h, 0, 1);
     axes(ctx, w, h, { ...sc, sy: () => -100 }, 0, 1, "");
+    tunnelBands(ctx, w, h, sc);
     verticals(ctx, w, h, sc);
     const vis = s.changes.filter(c => inWin(c.t));
     if (!vis.length) { emptyNote(ctx, w, h - 12, K.cellDiagnosis(s).key === "no_serving" ? "在圏セルを取得できず（判定できません）" : "この時間帯にセルイベントはありません"); return; }
@@ -841,6 +972,132 @@ const KRLApp = (() => {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // GPS track in 3D (latitude, longitude, GPS altitude only). Orthographic view rotated by the user;
+  // no terrain, no external data. Missing altitude is never drawn as 0 and breaks the line.
+  const t3d = { yaw: -0.6, pitch: 0.55, drag: null, screen: [] };
+  const T3D_DEFAULT = { yaw: -0.6, pitch: 0.55 };
+  function renderTrack3d() {
+    const canvas = $("track3d");
+    if (!canvas) return;
+    const { ctx, w, h } = setupCanvas(canvas);
+    const status = $("t3dStatus");
+    t3d.screen = [];
+    if (!w || !h) return;
+    const s = session();
+    if (!s) { status.textContent = ""; return emptyNote(ctx, w, h, "データ未読み込み"); }
+    if (st.view === "ble") { status.textContent = ""; return emptyNote(ctx, w, h, "BLE ライブでは GPS 高度を受信しないため 3D 表示できません（CSV のみ）"); }
+    const all = s.gps.filter(p => inWin(p.t));
+    const pts = all.filter(p => p.alt !== null && Number.isFinite(p.alt));
+    status.textContent = all.length ? `高度あり ${pts.length} 点${all.length > pts.length ? `・高度なし ${all.length - pts.length} 点（描きません）` : ""}` : "";
+    if (pts.length < 2) return emptyNote(ctx, w, h, all.length ? "GPS 高度の値が足りません（空欄、または列のない古い CSV）" : "この時間帯に GPS の測位がありません");
+    const exag = Number($("t3dExag").value) || 1;
+    const k = Math.PI / 180, R = 6371008.8;
+    const lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length, lon0 = pts.reduce((a, p) => a + p.lon, 0) / pts.length;
+    const cos0 = Math.cos(lat0 * k);
+    const altMin = Math.min(...pts.map(p => p.alt)), altMax = Math.max(...pts.map(p => p.alt));
+    const local = p => ({ e: (p.lon - lon0) * k * R * cos0, n: (p.lat - lat0) * k * R, u: (p.alt - altMin) * exag });
+    const L = pts.map(local);
+    const span = Math.max(50, ...L.map(q => Math.abs(q.e)), ...L.map(q => Math.abs(q.n))) * 2;
+    const height = (altMax - altMin) * exag;
+    const cy0 = Math.cos(t3d.yaw), sy0 = Math.sin(t3d.yaw), cp = Math.cos(t3d.pitch), sp = Math.sin(t3d.pitch);
+    // Fit the rotated bounding box (horizontal square plus the height) into the canvas.
+    const scale = Math.min((w - 40) / (span * 1.42), (h - 40) / (span * 1.42 * sp + height * cp + 1e-6));
+    const proj = q => {
+      const x = q.e * cy0 - q.n * sy0, depth = q.e * sy0 + q.n * cy0;
+      return [w / 2 + x * scale, h / 2 + (height / 2 - q.u) * cp * scale - depth * sp * scale];
+    };
+    // Reference plane at the lowest GPS altitude in the window (not the ground), with a north arrow.
+    ctx.save();
+    ctx.strokeStyle = css("--line"); ctx.lineWidth = 1;
+    const half = span / 2, step = span / 6;
+    for (let g = -half; g <= half + 1e-6; g += step) {
+      let [a, b] = [proj({ e: g, n: -half, u: 0 }), proj({ e: g, n: half, u: 0 })];
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+      [a, b] = [proj({ e: -half, n: g, u: 0 }), proj({ e: half, n: g, u: 0 })];
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    }
+    const [nx, ny] = proj({ e: 0, n: half * 1.08, u: 0 });
+    ctx.fillStyle = css("--muted"); ctx.font = "bold 12px system-ui"; ctx.textAlign = "center"; ctx.fillText("北", nx, ny); ctx.textAlign = "left";
+    const cursor = st.view === "csv" ? st.selectedT : null;
+    const isPast = t => cursor === null || t <= cursor;
+    // Faint drop lines from some points to the plane make the height readable.
+    const every = Math.max(1, Math.ceil(pts.length / 60));
+    ctx.strokeStyle = css("--muted"); ctx.globalAlpha = 0.35;
+    for (let i = 0; i < pts.length; i += every) {
+      if (!isPast(pts[i].t)) continue;
+      const [ax, ay] = proj(L[i]), [bx, by] = proj({ ...L[i], u: 0 });
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // Line breaks: a GPS gap over 5 s, or any blank altitude between two drawn points.
+    const idx = new Map(all.map((p, i) => [p, i]));
+    const scr = L.map(proj);
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      if (b.t - a.t > K.GPS_GAP_MS || idx.get(b) - idx.get(a) !== 1) continue;
+      const past = isPast(b.t);
+      ctx.globalAlpha = past ? 1 : 0.3; ctx.strokeStyle = css("--gps"); ctx.lineWidth = past ? 3 : 2;
+      ctx.beginPath(); ctx.moveTo(...scr[i - 1]); ctx.lineTo(...scr[i]); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    pts.forEach((p, i) => t3d.screen.push({ t: p.t, x: scr[i][0], y: scr[i][1] }));
+    // Position at the cursor / focus time: the last fix with altitude at or before it.
+    const t = focusT();
+    let cur = -1;
+    for (let i = 0; i < pts.length; i++) if (pts[i].t <= t) cur = i; else break;
+    if (cur >= 0) {
+      const [x, y] = scr[cur], stale = t - pts[cur].t > STALE_MS;
+      ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.lineWidth = 3; ctx.strokeStyle = stale ? css("--muted") : css("--bad"); ctx.stroke();
+      ctx.fillStyle = css("--fg"); ctx.font = "11px system-ui";
+      ctx.fillText(`${pts[cur].alt.toFixed(1)} m${stale ? "（古い値）" : ""}`, Math.min(x + 11, w - 90), Math.max(12, y - 8));
+    }
+    ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui";
+    ctx.fillText(`GPS 高度 ${altMin.toFixed(1)}〜${altMax.toFixed(1)} m・高さ ×${exag} 強調・格子 1 マス約 ${Math.round(step)} m`, 8, h - 8);
+    ctx.restore();
+  }
+  function wireTrack3d() {
+    const c = $("track3d");
+    if (!c) return;
+    let moved = false;
+    const rotate = (dyaw, dpitch) => {
+      t3d.yaw += dyaw;
+      t3d.pitch = Math.min(1.5, Math.max(0.05, t3d.pitch + dpitch));
+      renderTrack3d();
+    };
+    c.addEventListener("pointerdown", e => {
+      if (e.button !== 0) return;
+      t3d.drag = { id: e.pointerId, x: e.clientX, y: e.clientY }; moved = false;
+      if (c.setPointerCapture) try { c.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    });
+    c.addEventListener("pointermove", e => {
+      if (!t3d.drag || e.pointerId !== t3d.drag.id) return;
+      const dx = e.clientX - t3d.drag.x, dy = e.clientY - t3d.drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+      t3d.drag.x = e.clientX; t3d.drag.y = e.clientY;
+      rotate(dx * 0.01, dy * 0.01);
+    });
+    const end = e => {
+      if (!t3d.drag || e.pointerId !== t3d.drag.id) return;
+      t3d.drag = null;
+      if (moved || e.type !== "pointerup") return;
+      // A click (no drag) selects the nearest drawn point within 14 px.
+      let best = null, bd = 14;
+      for (const q of t3d.screen) { const d = Math.hypot(q.x - e.offsetX, q.y - e.offsetY); if (d < bd) { bd = d; best = q; } }
+      if (best) select(best.t);
+    };
+    c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+    c.addEventListener("keydown", e => {
+      const d = { ArrowLeft: [-0.1, 0], ArrowRight: [0.1, 0], ArrowUp: [0, -0.08], ArrowDown: [0, 0.08] }[e.key];
+      if (!d) return;
+      e.preventDefault(); e.stopPropagation();       // rotating must not move the replay cursor
+      rotate(...d);
+    });
+    $("t3dExag").addEventListener("input", renderTrack3d);
+    $("t3dReset").addEventListener("click", () => { Object.assign(t3d, T3D_DEFAULT); renderTrack3d(); });
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Route schematic and timetable (only when the page config has a route)
   function planMarkers() {
     const s = session();
@@ -850,80 +1107,444 @@ const KRLApp = (() => {
       .map(x => ({ t: K.jstTimeOnDay(ref, x.hh, x.mm), label: `${x.name} ${pad2(x.hh)}:${pad2(x.mm)}` }))
       .sort((a, b) => a.t - b.t);
   }
+  // ---------------------------------------------------------------------------------------------
+  // Tunnel reference sections and hints (LT page). Three layers kept apart: reference shapes from
+  // public sources, GPS proximity, and "トンネルかも？" from a GPS gap plus a cellular sign.
+  const tunnels = () => (cfg.route && cfg.route.tunnels) || [];
+  function tunnelInfoHtml() {
+    const acc = { approximate: "概略（駅を結んだ線）", unset: "位置未設定" };
+    return "<ul>" + tunnels().map(sec => `<li><b>${esc(sec.label)} ${esc(sec.name)}</b>（${esc(sec.line)}・${esc(sec.between)}）<br>` +
+      `位置の精度: ${esc(acc[sec.accuracy] ?? sec.accuracy)}。${esc(sec.accuracyNote)}<br>決め方: ${esc(sec.method)}。` +
+      `自動判定: ${sec.autoDetect ? `あり（概略線から ${sec.toleranceM} m 以内を「付近」）` : "未設定（表示のみ）"}。確認日: ${esc(sec.checked)}<br>出典: ` +
+      sec.sources.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("、") + "</li>").join("") +
+      "</ul><p>公式の機械可読な入口・出口の座標データは見つかっていません。帯は資料の駅間を示す参考範囲で、トンネルの坑口や実際の線路ではありません。GPS の点は線路へ補正しません。区間付近にいることは乗車中であることを意味しません。</p>";
+  }
+  const tunnelCache = new WeakMap();
+  /** Chart bands for the session; recomputed when the session grows (BLE). */
+  function tunnelIv(s) {
+    const key = `${s.gps.length}|${s.serving.length}|${s.probes.length}|${s.t1}`;
+    const hit = tunnelCache.get(s);
+    if (hit && hit.key === key) return hit.iv;
+    const iv = K.tunnelIntervals(s, tunnels());
+    tunnelCache.set(s, { key, iv });
+    return iv;
+  }
+  const TUNNEL_CHARTS = new Set(["chRsrp", "chQual", "chHttp"]);
+  /** Faint estimated bands under the data: near (GPS), maybe-tunnel (GPS gap + cell sign), GPS recovery ticks. */
+  function tunnelBands(ctx, w, h, sc) {
+    const s = session();
+    if (!s || !tunnels().length) return;
+    const iv = tunnelIv(s), [x0, x1] = windowRange();
+    const band = (a, b, fill, label) => {
+      if (b < x0 || a > x1) return;
+      const xa = Math.max(sc.sx(Math.max(a, x0)), PAD.l), xb = Math.min(sc.sx(Math.min(b, x1)), w - PAD.r);
+      ctx.fillStyle = fill; ctx.fillRect(xa, PAD.t, Math.max(2, xb - xa), h - PAD.t - PAD.b);
+      if (xb - xa > 40) { ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui"; ctx.fillText(label, xa + 3, h - PAD.b - 4); }
+    };
+    ctx.save();
+    for (const b of iv.near) band(b.a, b.b, "rgba(149,117,205,0.16)", "区間付近（推定）");
+    for (const b of iv.hint) band(b.a, b.b, "rgba(255,179,71,0.16)", "トンネルかも？（推定）");
+    for (const r of iv.recovery) {
+      if (!inWin(r.t)) continue;
+      const x = sc.sx(r.t);
+      ctx.strokeStyle = css("--serving"); ctx.lineWidth = 1.2; ctx.setLineDash([1, 3]);
+      ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, h - PAD.b); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = css("--serving"); ctx.font = "10px system-ui"; ctx.fillText("GPS 測位復帰", x + 3, PAD.t + 20);
+    }
+    ctx.restore();
+  }
+  /** Reference shapes on the GPS map ([lightBg] = tiles or light theme): solid band = underground (approx.), dashed = tunnel range, position unset. */
+  function drawSections(ctx, w, h, lightBg) {
+    for (const sec of tunnels()) {
+      const pts = sec.coords.map(([lat, lon]) => toScreen({ lat, lon }, w, h));
+      const under = sec.kind === "underground";
+      ctx.save();
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.strokeStyle = under ? (lightBg ? "rgba(103,58,183,0.45)" : "rgba(149,117,205,0.55)") : (lightBg ? "rgba(121,85,72,0.8)" : "rgba(188,170,164,0.8)");
+      ctx.lineWidth = under ? 16 : 4;
+      if (!under) ctx.setLineDash([10, 7]);
+      ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+      const [mx, my] = pts[Math.floor((pts.length - 1) / 2)];
+      if (mx > -50 && mx < w + 50 && my > -50 && my < h + 50) {
+        const text = under ? `${sec.label}・概略` : `${sec.label}を含む駅間・位置未設定`;
+        ctx.setLineDash([]); ctx.font = "11px system-ui";
+        const tw = ctx.measureText(text).width;
+        ctx.fillStyle = lightBg ? "rgba(255,255,255,.85)" : "rgba(0,0,0,.6)"; ctx.fillRect(mx + 10, my - 22, tw + 8, 16);
+        ctx.fillStyle = lightBg ? "#311b92" : "#e1d5f5"; ctx.fillText(text, mx + 14, my - 10);
+      }
+      ctx.restore();
+    }
+  }
+  /** Status chip and the facts behind it. Never says "in a tunnel" or "no signal". */
+  function renderTunnel() {
+    const chip = $("tunnelStatus");
+    if (!chip) return;
+    const s = session(), reasons = $("tunnelReasons");
+    let text = "判定材料なし", cls = "", why = "";
+    if (s && st.view === "ble" && liveStale()) {
+      text = "BLE 受信停止中（判定を保留）";
+      why = "BLE の受信が止まっているため、GPS・携帯網の欠測とは区別して判定を止めています。表示中の値は古い値です。";
+    } else if (s) {
+      const t = st.view === "ble" ? speedNow() : focusT();
+      const r = K.tunnelStateAt(s, t, tunnels());
+      const rec = r.recovered ? `GPS 測位復帰 ${K.jstClock(r.recovered.t)}（欠測 ${Math.round(r.recovered.gapMs / 1000)} 秒）` : "";
+      if (r.hint) {
+        text = `トンネルかも？（${r.approach.section.short}）`; cls = "maybe";
+        why = `観測事実: ${r.reasons.join("・")}。直前の GPS は ${K.jstClock(r.approach.t)} に${r.approach.section.label}の付近。センサーからの推測で、トンネル内・圏外とは断定しません。`;
+      } else if (r.near) {
+        text = r.near.lowAcc ? "トンネル区間付近（GPS精度低下）" : `トンネル区間付近（${r.near.section.short}）`; cls = "near";
+        why = `GPS 位置が${r.near.section.label}「${r.near.section.name}」の概略線から約 ${Math.round(r.near.distM)} m（許容 ${r.near.section.toleranceM} m）。区間内にいる・乗車中であるとは判定しません。${rec ? ` ${rec}。` : ""}`;
+      } else if (r.approach) {
+        text = "GPS 更新なし（区間付近の後）";
+        why = `観測事実: ${r.reasons.join("・")}。同じ時刻の在圏セル・RSRP には低下が見えないため「トンネルかも？」は出していません。GPS が止まる理由は屋内・端末の置き場所などもあります。`;
+      } else if (rec) {
+        text = "GPS 測位復帰"; cls = "near"; why = `${rec}。電波や HTTP の回復は各グラフの実測で確認してください（通過が原因とは断定しません）。`;
+      } else if (r.gps === "fresh") {
+        text = "トンネル区間外";
+        why = "GPS 位置は自動判定できる区間（調布付近の地下化区間）から離れています。高尾第一トンネルは位置未設定のため自動判定しません。";
+      } else if (r.gps === "gap") {
+        text = "GPS 更新なし（区間付近の記録なし）";
+        why = "区間に近づいた位置の記録がないため、トンネルかどうかは判定しません。";
+      } else why = "GPS の記録がないため、区間との位置関係は判定できません。";
+    }
+    chip.textContent = text;
+    chip.className = `chip tunnelstatus ${cls}`;
+    chip.title = why;
+    if (reasons) reasons.textContent = why;
+  }
+
+  /** Theme-dependent colours of the route schematic (the dark one is the LT "night map" look). */
+  function routePalette() {
+    return isLight()
+      ? { bg: ["#eaf4fb", "#dfeef8", "#e7f1f9"], wave: "rgba(30, 90, 130, .12)", glow: "rgba(0, 150, 200, .25)", glowShadow: "#4fc3e8", rail: "#0a8fb8",
+        ring: "rgba(10, 143, 184, .15)", stnFill: "#ffffff", stnEnd: "#0a8fb8", stnMid: "#27495c", name: "#10202c", time: "#3d5566", dir: "#4a6577",
+        plan: "#d9730d", planRing: "#7a3d00", planText: "#7a3d00", gpsEdge: "#00838f", gpsBack: "rgba(255,255,255,.95)", gpsText: "#00616a",
+        passed: "#9aa7b2", pinEdge: "#ffffff", pin: { lowacc: "#b38600", gap: "#5f6b75", near: "#5e35b1", hint: "#d9730d" } }
+      : { bg: ["#071522", "#0b1b2b", "#081321"], wave: "rgba(62, 119, 151, .12)", glow: "rgba(18, 201, 242, .36)", glowShadow: "#12c9f2", rail: "#23d7fa",
+        ring: "rgba(35, 215, 250, .13)", stnFill: "#071522", stnEnd: "#32e3ff", stnMid: "#d6f6ff", name: "#f2f7fb", time: "#a9bdcc", dir: "#8da8ba",
+        plan: "#ffb347", planRing: "#fff0cf", planText: "#fff0cf", gpsEdge: "#5ef2d0", gpsBack: "rgba(7,21,34,.92)", gpsText: "#b8fff0",
+        passed: "#5d6b78", pinEdge: "#071522", pin: { lowacc: "#f2c94c", gap: "#c4ced6", near: "#b39ddb", hint: "#ffb347" } };
+  }
+  /**
+   * A fix projected onto the schematic: { from, to, u, distKm, alongKm } between two schematic stations,
+   * or { reason } when it is inaccurate (> 30 m or unknown), off the route (>= offRouteKm) or cannot be
+   * placed. Freshness is checked by the callers. Cached per fix object.
+   */
+  const projCache = new WeakMap();
+  function projectFix(p) {
+    if (projCache.has(p)) return projCache.get(p);
+    let out;
+    if (p.acc === null || p.acc > LOW_ACC_M) out = { reason: `GPS 精度不足（${p.acc === null ? "精度不明" : `${p.acc.toFixed(0)} m`}）` };
+    else {
+      const pr = K.projectToPolyline(p.lat, p.lon, cfg.route.waypoints);
+      const stations = cfg.route.stations;
+      if (pr.distKm >= cfg.route.offRouteKm) out = { reason: "ルート外（ルート図には表示しません）" };
+      else if (!stations.every(x => Number.isInteger(x.wp) && x.wp < pr.cumKm.length)) out = { reason: "GPS 位置をルート図に表示できません" };
+      else {
+        // Station i sits at schematic index i; find the pair of stations whose route distance brackets the fix.
+        const at = stations.map((x, i) => ({ i, km: pr.cumKm[x.wp] })).sort((a, b) => a.km - b.km);
+        const seg = at.slice(0, -1).findIndex((a, k) => pr.alongKm >= a.km && pr.alongKm <= at[k + 1].km);
+        if (seg < 0) out = { reason: "GPS 位置をルート図に表示できません" };
+        else {
+          const a = at[seg], b = at[seg + 1];
+          out = { from: a.i, to: b.i, u: (pr.alongKm - a.km) / (b.km - a.km), distKm: pr.distKm, alongKm: pr.alongKm };
+        }
+      }
+    }
+    projCache.set(p, out);
+    return out;
+  }
+  /** The latest fix at or before [t] (any age) that projects onto the schematic, or null. Never a later fix. */
+  function lastProjected(s, t, maxAgeMs = Infinity) {
+    let lo = 0, hi = s.gps.length - 1, i = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (s.gps[m].t <= t) { i = m; lo = m + 1; } else hi = m - 1; }
+    for (; i >= 0 && t - s.gps[i].t <= maxAgeMs; i--) {
+      const pr = projectFix(s.gps[i]);
+      if (!pr.reason) return { p: s.gps[i], ...pr };
+    }
+    return null;
+  }
+  /**
+   * Where the GPS fix lies on the schematic, or why it is not shown. Uses only a fresh (<= 5 s), accurate
+   * (<= 30 m) fix at or before [t] that is within offRouteKm of the planned polyline; the fix is projected
+   * onto that rough line for the schematic only (the map keeps the raw position).
+   */
+  function routeGpsEstimate(s, t) {
+    if (!s) return { reason: "データなし" };
+    if (st.view === "ble" && liveStale()) return { reason: "BLE 受信停止中（古い位置は動かしません）" };
+    const p = lastAt(s.gps, t);
+    if (!p) return { reason: "GPS 位置なし" };
+    if (t - p.t > STALE_MS) return { reason: `GPS 更新なし（最後の測位 ${K.jstClock(p.t)}）` };
+    const pr = projectFix(p);
+    if (pr.reason) return pr;
+    return { p, ...pr, facing: routeFacing(s, p, pr.alongKm) };
+  }
+  /**
+   * Observed events for the route pins, in time order: GPS accuracy drop (start of a low-accuracy run),
+   * GPS gap (5 s after the last fix), tunnel-section proximity and "トンネルかも？" (start of each band,
+   * from the existing tunnel judgement). Each keeps the fix used for its place (or none). Cached per session.
+   */
+  const eventCache = new WeakMap();
+  function routeEvents(s) {
+    const key = `${s.gps.length}|${s.serving.length}|${s.probes.length}|${s.t1}`;
+    const hit = eventCache.get(s);
+    if (hit && hit.key === key) return hit.ev;
+    const ev = [];
+    const placeAt = t => lastProjected(s, t, 60000);
+    for (let i = 0; i < s.gps.length; i++) {
+      const p = s.gps[i], prev = s.gps[i - 1];
+      const low = p.acc === null || p.acc > LOW_ACC_M;
+      const prevLow = prev && prev.t >= p.t - K.GPS_GAP_MS && (prev.acc === null || prev.acc > LOW_ACC_M);
+      if (low && !prevLow) {
+        ev.push({ t: p.t, kind: "lowacc", why: `水平精度 ${p.acc === null ? "不明" : `${p.acc.toFixed(0)} m`}（${LOW_ACC_M} m を超える）`, at: placeAt(p.t), estimated: true });
+      }
+      if (prev && p.t - prev.t > K.GPS_GAP_MS) ev.push({ t: prev.t + K.GPS_GAP_MS, kind: "gap", lastFix: prev.t, end: p.t, at: placeAt(prev.t), estimated: true });
+    }
+    const last = s.gps[s.gps.length - 1];
+    if (last) ev.push({ t: last.t + K.GPS_GAP_MS, kind: "gap", lastFix: last.t, end: null, at: placeAt(last.t), estimated: true, open: true });
+    if (tunnels().length) {
+      const iv = tunnelIv(s);
+      for (const b of iv.near) {
+        const p = s.gps.find(q => q.t === b.a), own = p ? projectFix(p) : { reason: "x" };
+        ev.push({ t: b.a, kind: "near", why: `${b.section.label}「${b.section.name}」の概略線の近く（GPS 位置からの推定${b.lowAcc ? "・精度低下を含む" : ""}）`,
+          at: own.reason ? placeAt(b.a) : { p, ...own }, estimated: !!own.reason });
+      }
+      for (const b of iv.hint) {
+        const r = K.tunnelStateAt(s, b.a, tunnels());
+        ev.push({ t: b.a, kind: "hint", why: `${r.reasons.join("・")}（直前の GPS が区間付近。トンネル内とは断定しません）`, at: placeAt(b.a), estimated: true });
+      }
+    }
+    ev.sort((a, b) => a.t - b.t);
+    eventCache.set(s, { key, ev });
+    return ev;
+  }
+  const PIN_KINDS = {
+    lowacc: { label: "GPS精度低下", shape: "tri" },
+    gap: { label: "GPS更新なし", shape: "ring" },
+    near: { label: "トンネル区間付近", shape: "diamond" },
+    hint: { label: "トンネルかも？", shape: "square" },
+  };
+  /** Pins observed by time [t] (nothing later), with display text that never reveals later data. */
+  function routePinsAt(s, t) {
+    if (!s) return [];
+    return routeEvents(s).filter(e => e.t <= t && !(e.open && st.view === "csv" && e.t > s.t1)).map(e => {
+      let why = e.why;
+      if (e.kind === "gap") {
+        const ongoing = e.end === null || e.end > t;
+        why = `最後の測位 ${K.jstClock(e.lastFix)} から 5 秒を超えて更新なし（${ongoing ? `継続中・${Math.round((t - e.lastFix) / 1000)} 秒` : `欠測 ${Math.round((e.end - e.lastFix) / 1000)} 秒・${K.jstClock(e.end)} に測位復帰`}）`;
+      }
+      const at = e.at && e.at.p.t <= t ? e.at : null;
+      const where = !at ? "位置なし（推定の根拠がないため、ルート上には置きません）"
+        : `${e.estimated ? "位置は推定: " : ""}${K.jstClock(at.p.t)} の測位（精度 ${at.p.acc.toFixed(0)} m）を概略線へ投影`;
+      return { ...e, why, at, where };
+    });
+  }
+  /**
+   * Which way the GPS marker faces on the schematic: compares the route distance of this fix with an
+   * accurate fix 5-60 s earlier. Waypoints run 新宿 -> 高尾山口 and the schematic puts 高尾山口 on the left,
+   * so moving along the line means "left". Unknown or less than 30 m of progress = left (this demo's direction).
+   */
+  function routeFacing(s, p, alongKm) {
+    let i = s.gps.indexOf(p);
+    for (i--; i >= 0; i--) {
+      const q = s.gps[i];
+      if (p.t - q.t < 5000) continue;
+      if (p.t - q.t > 60000) break;
+      if (q.acc === null || q.acc > LOW_ACC_M) continue;
+      const d = alongKm - (projectFix(q).alongKm ?? K.projectToPolyline(q.lat, q.lon, cfg.route.waypoints).alongKm);
+      return d <= -0.03 ? "right" : "left";
+    }
+    return "left";
+  }
+  let routePinHits = [];
+  /** Text list of the observed pins (detail mode); each item selects its time. */
+  function renderPinList(pins) {
+    const ol = $("pinList");
+    if (!ol) return;
+    $("pinCount").textContent = String(pins.length);
+    ol.innerHTML = pins.length ? pins.slice().reverse().map(p => `<li><button type="button" class="linkish" data-t="${p.t}">${K.jstClock(p.t)}</button> <b>${esc(PIN_KINDS[p.kind].label)}</b>: ${esc(p.why)}。${esc(p.where)}</li>`).join("")
+      : "<li class=\"muted\">この時刻までの観測イベントはありません</li>";
+  }
+  /** Popover with the time, evidence and position basis of the pins under a click on the route canvas. */
+  function showPinPop(hit, px, py) {
+    const pop = $("pinPop");
+    if (!hit) { pop.classList.add("hidden"); return; }
+    $("pinPopBody").innerHTML = hit.pins.map(p => `<p><b>${K.jstClock(p.t)} ${esc(PIN_KINDS[p.kind].label)}</b><br>根拠: ${esc(p.why)}<br>${esc(p.where)}</p>`).join("");
+    pop.classList.remove("hidden");
+    const c = $("routeCanvas"), box = c.parentElement.getBoundingClientRect(), r = c.getBoundingClientRect();
+    pop.style.left = `${Math.max(4, Math.min(r.left - box.left + px + 8, box.width - 300))}px`;
+    pop.style.top = `${r.top - box.top + py + 10}px`;
+  }
   function renderRoute() {
     if (!cfg.route) return;
     const { ctx, w, h } = setupCanvas($("routeCanvas"));
-    const stations = cfg.route.stations;
-    const padX = Math.min(82, Math.max(56, w * 0.055));
+    const stations = cfg.route.stations, pal = routePalette();
+    const narrow = w < 640, roomy = h >= 90;
+    const padX = Math.min(82, Math.max(40, w * 0.055));
     const x = i => padX + i * (w - padX * 2) / (stations.length - 1);
-    const y = h * 0.58;
+    // Rows: station labels on top, the rail in the middle, direction labels at the bottom corners.
+    const y = roomy ? h * 0.56 : h * 0.52;
+    const labelY = Math.max(13, y - (roomy ? 22 : 14));
     // The rail overview is intentionally schematic. Give it a subtle night-map treatment without
     // implying that the line, cell regions, or GPS position are a geographic measurement.
     ctx.save();
     const bg = ctx.createLinearGradient(0, 0, w, h);
-    bg.addColorStop(0, "#071522"); bg.addColorStop(0.55, "#0b1b2b"); bg.addColorStop(1, "#081321");
+    bg.addColorStop(0, pal.bg[0]); bg.addColorStop(0.55, pal.bg[1]); bg.addColorStop(1, pal.bg[2]);
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "rgba(62, 119, 151, .12)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = pal.wave; ctx.lineWidth = 1;
     for (let row = 0; row < 4; row++) {
       const yy = 15 + row * (h - 30) / 3;
       ctx.beginPath(); ctx.moveTo(0, yy);
       for (let xx = 0; xx <= w; xx += 24) ctx.lineTo(xx, yy + Math.sin(xx / 92 + row) * 4);
       ctx.stroke();
     }
-    // Soft cyan glow and bright rail line, in the same visual language as the LT reference.
-    ctx.shadowColor = "#12c9f2"; ctx.shadowBlur = 16;
-    ctx.strokeStyle = "rgba(18, 201, 242, .36)"; ctx.lineWidth = 12; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(x(0), y);
-    ctx.bezierCurveTo(x(0) + (x(1) - x(0)) * .36, y - 17, x(1) - (x(1) - x(0)) * .25, y + 14, x(1), y);
-    ctx.bezierCurveTo(x(1) + (x(2) - x(1)) * .35, y - 14, x(2) - (x(2) - x(1)) * .28, y + 13, x(2), y);
-    ctx.stroke(); ctx.shadowBlur = 0;
-    ctx.strokeStyle = "#23d7fa"; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(x(0), y);
-    ctx.bezierCurveTo(x(0) + (x(1) - x(0)) * .36, y - 17, x(1) - (x(1) - x(0)) * .25, y + 14, x(1), y);
-    ctx.bezierCurveTo(x(1) + (x(2) - x(1)) * .35, y - 14, x(2) - (x(2) - x(1)) * .28, y + 13, x(2), y);
-    ctx.stroke();
+    // Cubic segments between neighbouring stations; markers are placed on the same curves.
+    const amp = roomy ? 1 : 0.6;
+    const curves = stations.slice(0, -1).map((_, i) => {
+      const x0 = x(i), x1 = x(i + 1), dx = x1 - x0, up = i % 2 === 0 ? [-17, 14] : [-14, 13];
+      return [[x0, y], [x0 + dx * (i ? .35 : .36), y + up[0] * amp], [x1 - dx * (i ? .28 : .25), y + up[1] * amp], [x1, y]];
+    });
+    const bez = (c, u) => [0, 1].map(k => (1 - u) ** 3 * c[0][k] + 3 * (1 - u) ** 2 * u * c[1][k] + 3 * (1 - u) * u ** 2 * c[2][k] + u ** 3 * c[3][k]);
+    /** Point on the rail between schematic stations [i] and [j] at fraction [u] of the way from i. */
+    const railPoint = (i, j, u) => {
+      const lo = Math.min(i, j), c = curves[lo];
+      return bez(c, i < j ? u : 1 - u);
+    };
+    const rail = () => { ctx.beginPath(); ctx.moveTo(x(0), y); for (const c of curves) ctx.bezierCurveTo(c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]); ctx.stroke(); };
+    ctx.shadowColor = pal.glowShadow; ctx.shadowBlur = 16;
+    ctx.strokeStyle = pal.glow; ctx.lineWidth = 12; ctx.lineCap = "round"; rail(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = pal.rail; ctx.lineWidth = 5; rail();
+    const s = session();
+    const posT = st.view === "ble" ? speedNow() : focusT();
+    // Passed part of the line (grey): from the departure station (earliest timetable time) to the latest
+    // fix that projects onto the schematic, at or before the cursor / live time. It stops when GPS stops.
+    const progress = s ? lastProjected(s, posT) : null;
+    if (progress) {
+      const startIdx = stations.map((stn, i) => ({ i, m: stn.hh * 60 + stn.mm })).sort((a, b) => a.m - b.m)[0].i;
+      const c = Math.min(progress.from, progress.to), tc = progress.from < progress.to ? progress.u : 1 - progress.u;
+      // de Casteljau split of a cubic at [t]: [left part, right part].
+      const split = (q, t) => {
+        const L = (a, b) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        const ab = L(q[0], q[1]), bc = L(q[1], q[2]), cd = L(q[2], q[3]), abc = L(ab, bc), bcd = L(bc, cd), m = L(abc, bcd);
+        return [[q[0], ab, abc, m], [m, bcd, cd, q[3]]];
+      };
+      const parts = startIdx > c
+        ? [split(curves[c], tc)[1], ...curves.slice(c + 1, startIdx)]
+        : [...curves.slice(startIdx, c), split(curves[c], tc)[0]];
+      ctx.strokeStyle = pal.passed; ctx.lineWidth = 6;
+      for (const q of parts) { ctx.beginPath(); ctx.moveTo(...q[0]); ctx.bezierCurveTo(...q[1], ...q[2], ...q[3]); ctx.stroke(); }
+    }
+    // One label per station ("name 予定 hh:mm着"), kept inside the canvas and shrunk if neighbours touch.
+    const labelText = stn => `${stn.name} ${narrow ? "" : "予定 "}${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`;
+    let size = roomy ? 14 : 12;
+    const widths = () => stations.map(stn => { ctx.font = `bold ${size}px system-ui`; return ctx.measureText(labelText(stn)).width; });
+    let tw = widths();
+    const lefts = () => tw.map((wd, i) => Math.min(Math.max(x(i) - wd / 2, 4), w - 4 - wd));
+    const overlaps = l => l.some((lx, i) => i > 0 && lx < l[i - 1] + tw[i - 1] + 8);
+    while (size > 9 && overlaps(lefts())) { size--; tw = widths(); }
+    const lx = lefts();
     stations.forEach((stn, i) => {
       const endpoint = i === 0 || i === stations.length - 1;
-      if (endpoint) {
-        ctx.beginPath(); ctx.arc(x(i), y, 13, 0, Math.PI * 2); ctx.fillStyle = "rgba(35, 215, 250, .13)"; ctx.fill();
-      }
+      if (endpoint) { ctx.beginPath(); ctx.arc(x(i), y, 13, 0, Math.PI * 2); ctx.fillStyle = pal.ring; ctx.fill(); }
       ctx.beginPath(); ctx.arc(x(i), y, endpoint ? 8 : 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#071522"; ctx.fill(); ctx.lineWidth = endpoint ? 3 : 2.5; ctx.strokeStyle = endpoint ? "#32e3ff" : "#d6f6ff"; ctx.stroke();
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#f2f7fb"; ctx.font = `bold ${endpoint ? 15 : 13}px system-ui`; ctx.fillText(stn.name, x(i), y - 20);
-      ctx.fillStyle = "#a9bdcc"; ctx.font = "12px system-ui"; ctx.fillText(`予定 ${pad2(stn.hh)}:${pad2(stn.mm)}${stn.kind}`, x(i), y + 25);
+      ctx.fillStyle = pal.stnFill; ctx.fill(); ctx.lineWidth = endpoint ? 3 : 2.5; ctx.strokeStyle = endpoint ? pal.stnEnd : pal.stnMid; ctx.stroke();
+      ctx.textAlign = "left"; ctx.font = `bold ${size}px system-ui`;
+      const name = `${stn.name} `;
+      ctx.fillStyle = pal.name; ctx.fillText(name, lx[i], labelY);
+      const nw = ctx.measureText(name).width;
+      ctx.font = `${size - 1}px system-ui`; ctx.fillStyle = pal.time;
+      ctx.fillText(labelText(stn).slice(name.length), lx[i] + nw, labelY);
     });
-    ctx.font = "11px system-ui"; ctx.fillStyle = "#8da8ba";
-    ctx.textAlign = "left"; ctx.fillText("← 高尾・高尾山口方面", 12, h - 9);
-    ctx.textAlign = "right"; ctx.fillText("新宿・都心方面 →", w - 12, h - 9);
+    ctx.font = `${roomy ? 11 : 10}px system-ui`; ctx.fillStyle = pal.dir;
+    ctx.textAlign = "left"; ctx.fillText(narrow ? "← 高尾方面" : "← 高尾・高尾山口方面", 6, h - 5);
+    ctx.textAlign = "right"; ctx.fillText(narrow ? "新宿方面 →" : "新宿・都心方面 →", w - 6, h - 5);
     ctx.textAlign = "left";
-    const s = session();
-    // Scheduled position from the timetable (not a measurement).
+    const est = routeGpsEstimate(s, posT);
+    const gpsAt = est.reason ? null : railPoint(est.from, est.to, est.u);
+    // Scheduled position from the timetable (not a measurement): amber circle with a dashed ring.
     const planT = s ? focusT() : null;
     let note = "駅は均等配置の概略図で、距離の縮尺はありません。予定時刻は京王電鉄の公式時刻表（土休日）の掲載値で、乗車日に確認してください。";
     if (planT !== null) {
-      const ordered = stations.map((stn, i) => ({ t: K.jstTimeOnDay(planT, stn.hh, stn.mm), x: x(i) }))
-        .sort((a, b) => a.t - b.t);
-      const segment = ordered.slice(0, -1).find((a, i) => planT >= a.t && planT <= ordered[i + 1].t);
-      if (segment) {
-        const i = ordered.indexOf(segment), next = ordered[i + 1];
-        const px = segment.x + (planT - segment.t) / (next.t - segment.t) * (next.x - segment.x);
-        ctx.shadowColor = "#ffb347"; ctx.shadowBlur = 12;
-        ctx.beginPath(); ctx.arc(px, y, 9, 0, Math.PI * 2); ctx.fillStyle = "#ffb347"; ctx.fill(); ctx.shadowBlur = 0;
-        ctx.beginPath(); ctx.arc(px, y, 13, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2; ctx.strokeStyle = "#fff0cf"; ctx.stroke(); ctx.setLineDash([]);
-        ctx.textAlign = px > w * .78 ? "right" : "left";
-        ctx.fillStyle = "#fff0cf"; ctx.font = "bold 11px system-ui"; ctx.fillText("予定位置", px > w * .78 ? px - 15 : px + 15, y - 11);
-        ctx.textAlign = "left";
-        note += " 点線の円は、選択中の時刻から時刻表で計算した予定位置で、実測位置ではありません。";
+      const ordered = stations.map((stn, i) => ({ t: K.jstTimeOnDay(planT, stn.hh, stn.mm), i })).sort((a, b) => a.t - b.t);
+      const k = ordered.slice(0, -1).findIndex((a, n) => planT >= a.t && planT <= ordered[n + 1].t);
+      if (k >= 0) {
+        const a = ordered[k], b = ordered[k + 1];
+        const [px, py] = railPoint(a.i, b.i, (planT - a.t) / (b.t - a.t));
+        ctx.shadowColor = pal.plan; ctx.shadowBlur = 12;
+        ctx.beginPath(); ctx.arc(px, py, 8, 0, Math.PI * 2); ctx.fillStyle = pal.plan; ctx.fill(); ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.lineWidth = 2; ctx.strokeStyle = pal.planRing; ctx.stroke(); ctx.setLineDash([]);
+        // The text label is left to the legend when the GPS marker is close (its tag sits below it too).
+        if (roomy && (!gpsAt || Math.abs(gpsAt[0] - px) > 70)) {
+          ctx.font = "bold 11px system-ui"; ctx.fillStyle = pal.planText; ctx.textAlign = "center";
+          ctx.fillText("予定位置", Math.min(Math.max(px, 30), w - 30), py + 27); ctx.textAlign = "left";
+        }
+        note += " 琥珀色の点線の円は、選択中の時刻から時刻表で計算した予定位置で、実測位置ではありません。";
       }
     }
-    note += ` GPS の実測位置は地図で確認してください（概略図には投影しません）。ルート外の判定は、主要駅を結んだ概略線から ${cfg.route.offRouteKm} km 以上離れているかどうかだけで行い、乗車中かどうかは判定しません。`;
+    // Event pins, accumulated in time order up to the cursor / live time. Near pins stagger into three
+    // rows; when all rows are taken the pin is folded into its neighbour's "+n" count. Kept on the rail
+    // band so the canvas never grows.
+    const pins = routePinsAt(s, posT);
+    routePinHits = [];
+    const rowY = [0, roomy ? -13 : -9, roomy ? 13 : 9], lastX = [-Infinity, -Infinity, -Infinity], folded = new Map();
+    const placed = [];
+    for (const pin of pins) {
+      if (!pin.at) continue;
+      const [px, py] = railPoint(pin.at.from, pin.at.to, pin.at.u);
+      let row = lastX.findIndex(v => Math.abs(px - v) >= 11);
+      if (row < 0) { const host = placed[placed.length - 1]; folded.set(host, (folded.get(host) || 1) + 1); host.more.push(pin); continue; }
+      lastX[row] = px;
+      placed.push({ pin, x: px, y: py + rowY[row], more: [] });
+    }
+    for (const q of placed) {
+      const k = PIN_KINDS[q.pin.kind], col = pal.pin[q.pin.kind], r = roomy ? 5.5 : 4.5;
+      ctx.lineWidth = 1.5; ctx.strokeStyle = pal.pinEdge; ctx.fillStyle = col;
+      ctx.beginPath();
+      if (k.shape === "tri") { ctx.moveTo(q.x, q.y - r - 1); ctx.lineTo(q.x + r, q.y + r - 1); ctx.lineTo(q.x - r, q.y + r - 1); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      else if (k.shape === "ring") { ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fillStyle = pal.pinEdge; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = col; ctx.stroke(); }
+      else if (k.shape === "diamond") { ctx.moveTo(q.x, q.y - r - 1); ctx.lineTo(q.x + r + 1, q.y); ctx.lineTo(q.x, q.y + r + 1); ctx.lineTo(q.x - r - 1, q.y); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      else { ctx.rect(q.x - r, q.y - r, r * 2, r * 2); ctx.fill(); ctx.stroke(); }
+      if (folded.has(q)) { ctx.font = "bold 9px system-ui"; ctx.fillStyle = pal.name; ctx.fillText(`+${folded.get(q) - 1}`, q.x + r + 2, q.y - r); }
+      routePinHits.push({ x: q.x, y: q.y, pins: [q.pin, ...q.more] });
+    }
+    renderPinList(pins);
+    // GPS estimate: speed-band sprite in a cyan-edged square with a "GPS" tag, never from a stale or far
+    // fix. The sprite (drawn facing right) is mirrored to face the direction of travel; frame and text are not.
+    if (gpsAt) {
+      const [gx, gy] = gpsAt;
+      const size = roomy ? 28 : 22, half = size / 2 + 4;
+      ctx.fillStyle = pal.gpsBack; ctx.fillRect(gx - half, gy - half, half * 2, half * 2);
+      ctx.lineWidth = 2.5; ctx.strokeStyle = pal.gpsEdge; ctx.strokeRect(gx - half, gy - half, half * 2, half * 2);
+      const state = K.speedStateAt(s.gps, posT);
+      if (sprite) {
+        const f = K.spriteFrame(sprite.naturalWidth || sprite.width, sprite.naturalHeight || sprite.height, state.band ?? 0);
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.translate(gx, gy);
+        if (est.facing === "left") ctx.scale(-1, 1);
+        ctx.drawImage(sprite, f.x, f.y, f.w, f.h, -size / 2, -size / 2, size, size);
+        ctx.restore();
+      } else { ctx.fillStyle = pal.gpsText; ctx.font = "bold 11px system-ui"; ctx.textAlign = "center"; ctx.fillText("GPS", gx, gy + 4); ctx.textAlign = "left"; }
+      if (roomy) {
+        // Small tag on the bottom edge of the frame: part of the marker, so it never lands on a station label.
+        ctx.font = "bold 10px system-ui";
+        const tag = "GPS推定", tw = ctx.measureText(tag).width + 8;
+        ctx.fillStyle = pal.gpsEdge; ctx.fillRect(gx - tw / 2, gy + half - 2, tw, 13);
+        ctx.fillStyle = pal.gpsBack; ctx.textAlign = "center"; ctx.fillText(tag, gx, gy + half + 8); ctx.textAlign = "left";
+      }
+    }
+    const gpsLabel = $("routeGps");
+    if (gpsLabel) {
+      gpsLabel.textContent = est.reason ? `表示なし（${est.reason}）` : `${K.jstClock(est.p.t)} の測位・概略線から約 ${est.distKm.toFixed(est.distKm < 10 ? 1 : 0)} km`;
+      gpsLabel.className = est.reason ? "nodata" : "";
+    }
+    note += " グレーの線は、新宿側から最新の有効な GPS 推定位置までの通過済み区間です（時刻表の予定では進めません。GPS が止まると境界も止まります）。ピンは、その時刻までに観測した GPS 精度低下・GPS 更新なし・トンネル区間付近・トンネルかも？で、後の時刻のものは出しません。欠測などの位置は直前の有効な測位からの推定で、根拠がなければ置きません。";
+    note += ` 水色の枠の小さなキャラクターは「GPS 推定位置」で、新しい（5 秒以内）・精度 ${LOW_ACC_M} m 以内の測位を、主要駅を結んだ概略線へいちばん近い点で投影した位置です。概略線が粗いため駅との前後関係は目安で、乗車中かどうかは判定しません。GPS が古い・低精度・ルートから ${cfg.route.offRouteKm} km 以上離れているときは表示しません。GPS の実測位置は地図にそのまま描きます。ルート外の判定は、同じ概略線から ${cfg.route.offRouteKm} km 以上離れているかどうかだけで行います。`;
     $("routeNote").textContent = note;
     $("markerList").textContent = st.markers.length ? st.markers.map(m => `${K.jstClock(m.t, false)} ${m.label}`).join("・") : "（メモなし。ページを閉じると消えます）";
 
     // Where the real GPS position is relative to the planned route. Never claims "on board".
     const status = $("routeStatus");
-    const posT = st.view === "ble" ? speedNow() : focusT();
     const p = s ? lastAt(s.gps, posT) : null;
     if (!p || posT - p.t > 10000) {
       status.textContent = "GPS 位置なし（予定ルートとの位置関係は不明）";
@@ -941,7 +1562,7 @@ const KRLApp = (() => {
 
   // ---------------------------------------------------------------------------------------------
   function render() {
-    renderHeader(); renderReplay(); renderRoute(); renderCards(); renderCharacter(); renderHistory(); drawMap(); renderCharts(); renderSensors(); renderSelection();
+    renderHeader(); renderReplay(); renderRoute(); renderTunnel(); renderCards(); renderCharacter(); renderHistory(); drawMap(); renderCharts(); renderTrack3d(); renderSensors(); renderSelection();
     const s = session();
     if (st.view === "csv" && s) {
       const [a, b] = windowRange();
@@ -970,7 +1591,7 @@ const KRLApp = (() => {
     // Refit the map to its new viewport while keeping the selected CSV time and range intact.
     st.map.view = null; st.map.userMoved = false;
     updateDashboardHeight();
-    requestAnimationFrame(render);
+    requestAnimationFrame(() => { render(); if (!float.hidden && !float.custom) placeFloat(null, null); });
   }
 
   function updateDashboardHeight() {
@@ -1069,13 +1690,14 @@ const KRLApp = (() => {
   function loadDemoData(mode = "demo") {
     if (st.demo && st.csv && st.debug === (mode === "debug")) return;
     const isDebug = mode === "debug";
-    const s = K.buildCsvSession(KRL_DEMO_DATA.createCsv({ debug: isDebug }));
+    // A page may swap in its own fictional #debug story (the LT page uses a tunnel pass).
+    const s = K.buildCsvSession(KRL_DEMO_DATA.createCsv({ debug: isDebug, scenario: cfg.debugScenario ?? null }));
     if (s.error) { message([["bad", `デモデータを作れませんでした: ${s.error}`]]); return; }
     pause();
     st.csv = s; st.demo = true; st.debug = isDebug; st.range = [0, 1]; st.csvT = s.t0 + 2000;
     $("rangeStart").value = 0; $("rangeEnd").value = 1000;
     if (st.view === "csv") st.view = "none";
-    message([["", `${st.debug ? "DEBUG" : "デモ"}データを表示中: ${s.rows.toLocaleString()} 行（架空の位置・ネットワーク情報です）。CSV ファイルは読み込んでいません。`]]);
+    message([["", `${st.debug ? (cfg.debugScenario === "tunnel" ? "DEBUG（調布付近を通過する架空シナリオ）" : "DEBUG") : "デモ"}データを表示中:${s.rows.toLocaleString()} 行（架空の位置・ネットワーク情報です）。CSV ファイルは読み込んでいません。`]]);
     setView("csv");
     const hash = st.debug ? "#debug" : "#demo";
     if (location.hash !== hash) history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
@@ -1172,6 +1794,8 @@ const KRLApp = (() => {
       if (location.hash === "#demo" || location.hash === "#debug") loadDemoData(location.hash.slice(1));
     });
     $("overviewMode").addEventListener("click", () => setDashboardMode(true));
+    // Theme switch redraws in place: same data, cursor, range and layout; no reload.
+    $("themeToggle").addEventListener("click", () => { setTheme(isLight() ? "dark" : "light", true); render(); });
     $("detailMode").addEventListener("click", () => setDashboardMode(false));
     $("file").addEventListener("change", e => readFile(e.target.files[0]));
     const drop = $("drop");
@@ -1242,6 +1866,15 @@ const KRLApp = (() => {
       $(id).addEventListener("click", e => { if (!session()) return; const sc = scales($(id).clientWidth, $(id).clientHeight, 0, 1); select(sc.tx(e.offsetX)); });
     }
     if (cfg.route) {
+      // Pins: click / tap opens the details of the nearest pin (within 10 px); elsewhere closes it.
+      $("routeCanvas").addEventListener("click", e => {
+        let best = null, bd = 10;
+        for (const q of routePinHits) { const d = Math.hypot(q.x - e.offsetX, q.y - e.offsetY); if (d < bd) { bd = d; best = q; } }
+        showPinPop(best, e.offsetX, e.offsetY);
+      });
+      $("pinPopClose").addEventListener("click", () => { showPinPop(null); $("routeCanvas").focus?.(); });
+      document.addEventListener("keydown", e => { if (e.key === "Escape") showPinPop(null); });
+      $("pinList").addEventListener("click", e => { const b = e.target.closest("button[data-t]"); if (b) select(Number(b.dataset.t)); });
       $("addMarker").addEventListener("click", () => {
         const s = session(); if (!s) return;
         const t = st.selectedT ?? (st.view === "ble" && st.live.last ? st.live.last.payload.t : null);
@@ -1259,7 +1892,7 @@ const KRLApp = (() => {
     // Clock, BLE staleness and card ages move even without new data.
     setInterval(() => {
       $("clock").textContent = `${K.jstClock(Date.now())} JST`;
-      if (st.view === "ble") { renderHeader(); renderCards(); renderCharacter(); renderRoute(); drawMap(); } else renderHeader();
+      if (st.view === "ble") { renderHeader(); renderCards(); renderCharacter(); renderRoute(); renderTunnel(); drawMap(); } else renderHeader();
     }, 1000);
   }
 
@@ -1306,12 +1939,15 @@ const KRLApp = (() => {
 
   function start(config) {
     cfg = config;
+    setTheme(loadTheme(), false);
     buildLayout();
+    setTheme(loadTheme(), false);
     document.body.classList.add("dashboard-overview");
     document.body.classList.toggle("has-route", !!cfg.route);
     loadSprite();
     wire();
     wireFloat();
+    wireTrack3d();
     updateDashboardHeight();
     if (window.ResizeObserver) new ResizeObserver(updateDashboardHeight).observe($("topHeader"));
     $("clock").textContent = `${K.jstClock(Date.now())} JST`;

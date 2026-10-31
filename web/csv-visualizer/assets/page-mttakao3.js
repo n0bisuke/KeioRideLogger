@@ -9,11 +9,14 @@ KRLApp.start({
   showDistance: false,
   layout: "onescreen",
   assetBase: "../",
+  // #debug on this page plays a fictional pass by the Chofu underground section (see demo-data.js).
+  debugScenario: "tunnel",
   route: {
     stations: [
-      { name: "高尾山口", hh: 11, mm: 45, kind: "着" },
-      { name: "明大前", hh: 11, mm: 6, kind: "" },
-      { name: "新宿", hh: 11, mm: 0, kind: "発" },
+      // wp: index of the station in waypoints (places the GPS estimate between schematic stations).
+      { name: "高尾山口", hh: 11, mm: 45, kind: "着", wp: 7 },
+      { name: "明大前", hh: 11, mm: 6, kind: "", wp: 1 },
+      { name: "新宿", hh: 11, mm: 0, kind: "発", wp: 0 },
     ],
     // Public station locations (approximate, WGS84) along the Keio Line / Takao Line, joined into a
     // rough polyline. Used only for the "off the planned route" notice; positions are never snapped.
@@ -29,5 +32,7 @@ KRLApp.start({
     ],
     offRouteKm: 2,
     memoLabels: ["乗車", "新宿発", "明大前", "高尾山口着", "トンネル", "その他"],
+    // Reference underground / tunnel sections with sources and accuracy (tunnel-sections.js).
+    tunnels: window.KRL_TUNNEL_SECTIONS || [],
   },
 });

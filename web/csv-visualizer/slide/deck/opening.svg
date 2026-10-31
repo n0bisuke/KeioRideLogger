@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#fff"/>
+  <text x="640" y="146" text-anchor="middle" fill="#555" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="28">京王ライナーで</text>
+  <text x="640" y="211" text-anchor="middle" fill="#333" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="46" font-weight="600">電波を測ってみた</text>
+  <text x="640" y="253" text-anchor="middle" fill="#777" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="20">電車が動くと、スマホの通信はどう変わる？</text>
+  <text x="640" y="283" text-anchor="middle" fill="#888" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="15">Androidで記録し、BLEでブラウザに表示</text>
+
+  <g transform="translate(115 314)" fill="none" stroke="#00aaa7" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M36 45 Q74 7 112 45 M48 57 Q74 31 100 57"/>
+    <path d="M74 53 L49 147 L99 147 Z M74 53 L74 147" stroke="#687787" stroke-width="5"/>
+    <circle cx="74" cy="53" r="5" fill="#00aaa7" stroke="none"/>
+  </g>
+  <text x="189" y="493" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="18">接続中のセル</text>
+
+  <path d="M318 414 H443" stroke="#999" stroke-width="3" stroke-dasharray="7 9"/>
+  <path d="M431 402 L445 414 L431 426" fill="none" stroke="#00aaa7" stroke-width="4"/>
+  <g transform="translate(473 370)">
+    <path d="M0 58 Q0 42 18 42 H208 Q226 42 226 58 V102 Q226 118 208 118 H18 Q0 118 0 102 Z" fill="#2160df"/>
+    <rect x="22" y="56" width="35" height="23" rx="4" fill="#dcecff"/><rect x="70" y="56" width="35" height="23" rx="4" fill="#dcecff"/><rect x="118" y="56" width="35" height="23" rx="4" fill="#dcecff"/><rect x="166" y="56" width="35" height="23" rx="4" fill="#dcecff"/>
+    <circle cx="48" cy="119" r="12" fill="#344253"/><circle cx="178" cy="119" r="12" fill="#344253"/>
+    <path d="M-25 130 H255" stroke="#76869a" stroke-width="4" stroke-dasharray="10 8"/>
+    <path d="M235 84 H280" stroke="#2160df" stroke-width="4"/><path d="M267 72 L281 84 L267 96" fill="none" stroke="#2160df" stroke-width="4"/>
+  </g>
+  <text x="586" y="548" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="18">移動中に計測</text>
+
+  <path d="M786 414 H900" stroke="#999" stroke-width="3" stroke-dasharray="7 9"/>
+  <path d="M888 402 L902 414 L888 426" fill="none" stroke="#00aaa7" stroke-width="4"/>
+  <g transform="translate(938 336)" fill="none" stroke="#657583" stroke-width="5" stroke-linejoin="round">
+    <rect x="0" y="12" width="194" height="126" rx="7" fill="#fff"/>
+    <path d="M-14 151 H208 L190 168 H5 Z" fill="#edf1f3"/>
+    <path d="M24 102 L60 83 L95 92 L132 54 L167 69" stroke="#00aaa7" stroke-width="5"/>
+    <circle cx="60" cy="83" r="4" fill="#00aaa7"/><circle cx="132" cy="54" r="4" fill="#00aaa7"/>
+  </g>
+  <text x="1035" y="548" text-anchor="middle" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="18">ブラウザでライブ表示</text>
+
+  <text x="64" y="642" fill="#555" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="18">菅原 のびすけ</text>
+  <text x="64" y="670" fill="#777" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="16">@n0bisuke</text>
+  <text x="1215" y="665" text-anchor="end" fill="#666" font-family="-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif" font-size="18">IoTLT · Keio Ride Logger</text>
+  <rect x="0" y="713" width="1280" height="7" fill="#00aaa7"/>
+</svg>
